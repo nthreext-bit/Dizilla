@@ -1,0 +1,19 @@
+{
+  "brandTag": "dizilla",
+  "allowHosts": [
+    "macellan.online",
+    "file.macellan.online",
+    "accounts.google.com",
+    "accounts.youtube.com",
+    "ssl.gstatic.com",
+    "apis.google.com"
+  ],
+  "blockHosts": [
+    "yabancidizi.my",
+    "bet365.com",
+    "1xbet.com"
+  ],
+  "extraCssHideSelectors": "",
+  "userAgentMode": "mobile",
+  "desktopMode": false
+}

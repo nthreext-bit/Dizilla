@@ -1,0 +1,6 @@
+{
+  "name": "Dizilla",
+  "description": "Dizilla streaming web client with built-in ad/tracker blocker, fullscreen video, PiP, and Chromecast support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

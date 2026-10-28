@@ -1,0 +1,770 @@
+package com.example
+
+import android.app.Dialog
+import android.app.PictureInPictureParams
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Message
+import android.util.Log
+import android.util.Rational
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebStorage
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.addCallback
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.ui.platform.ComposeView
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.mediarouter.app.MediaRouteButton
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import com.google.android.gms.cast.MediaInfo
+import com.google.android.gms.cast.MediaLoadOptions
+import com.google.android.gms.cast.MediaMetadata
+import com.google.android.gms.cast.framework.CastButtonFactory
+import com.google.android.gms.cast.framework.CastContext
+import com.google.android.gms.cast.framework.CastSession
+import com.google.android.gms.cast.framework.SessionManagerListener
+import kotlinx.coroutines.launch
+import java.util.Locale
+
+class MainActivity : AppCompatActivity() {
+
+    companion object {
+        private const val TAG = "DizillaApp"
+        private const val MOBILE_USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36"
+    }
+
+    private lateinit var addressManager: SiteAddressManager
+    private lateinit var profileManager: ProfileManager
+    private lateinit var adBlocker: AdBlocker
+
+    // UI references
+    private lateinit var mainContentContainer: LinearLayout
+    private lateinit var topBar: View
+    private lateinit var webView: WebView
+    private lateinit var swipeRefreshLayout: SwipeRefreshLayout
+    private lateinit var pageProgressBar: ProgressBar
+    private lateinit var errorContainer: LinearLayout
+    private lateinit var btnRetry: Button
+    private lateinit var txtDomain: TextView
+    private lateinit var txtAdBlockBadge: TextView
+    private lateinit var btnAdBlockStatus: View
+    private lateinit var btnRefresh: ImageButton
+    private lateinit var btnSettings: ImageButton
+    private lateinit var mediaRouteButton: MediaRouteButton
+
+    // Jetpack Compose Settings / Setup View
+    private lateinit var composeSettingsView: ComposeView
+
+    // Detected Video Cast Banner
+    private lateinit var castStreamBanner: View
+    private lateinit var txtCastStreamInfo: TextView
+    private lateinit var btnCastNow: Button
+    private lateinit var btnCloseCastBanner: ImageButton
+
+    // Fullscreen and PiP
+    private lateinit var fullscreenContainer: FrameLayout
+    private lateinit var fullscreenOverlayControls: View
+    private lateinit var btnExitFullscreen: ImageButton
+    private lateinit var btnPipFullscreen: ImageButton
+    private var customView: View? = null
+    private var customViewCallback: WebChromeClient.CustomViewCallback? = null
+
+    // Chromecast
+    private var castContext: CastContext? = null
+    private var currentCastSession: CastSession? = null
+    private var lastDetectedVideoUrl: String? = null
+    private var lastDetectedVideoTitle: String = "Dizilla Video"
+
+    private val sessionManagerListener = object : SessionManagerListener<CastSession> {
+        override fun onSessionStarted(session: CastSession, sessionId: String) {
+            currentCastSession = session
+            lastDetectedVideoUrl?.let { url ->
+                castVideo(url, lastDetectedVideoTitle)
+            }
+        }
+
+        override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
+            currentCastSession = session
+        }
+
+        override fun onSessionEnded(session: CastSession, error: Int) {
+            currentCastSession = null
+        }
+
+        override fun onSessionSuspended(session: CastSession, reason: Int) {}
+        override fun onSessionStarting(session: CastSession) {}
+        override fun onSessionResuming(session: CastSession, sessionId: String) {}
+        override fun onSessionEnding(session: CastSession) {}
+        override fun onSessionStartFailed(session: CastSession, error: Int) {}
+        override fun onSessionResumeFailed(session: CastSession, error: Int) {}
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // Android 12+ SplashScreen
+        installSplashScreen()
+
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+
+        addressManager = SiteAddressManager(this)
+        profileManager = ProfileManager(this)
+
+        adBlocker = AdBlocker(this)
+        adBlocker.siteAddressManager = addressManager
+
+        initViews()
+        setupCast()
+        setupWebView()
+        setupSwipeRefresh()
+        setupBackNavigation()
+
+        // Address Management: Load active URL or show setup screen if empty
+        val activeUrl = addressManager.currentUrl
+        if (activeUrl.isNullOrBlank()) {
+            showSetupUrlScreen()
+        } else {
+            updateActiveProfile(activeUrl)
+            webView.loadUrl(activeUrl)
+        }
+    }
+
+    private fun initViews() {
+        mainContentContainer = findViewById(R.id.mainContentContainer)
+        topBar = findViewById(R.id.topBar)
+        webView = findViewById(R.id.webView)
+        swipeRefreshLayout = findViewById(R.id.swipeRefreshLayout)
+        pageProgressBar = findViewById(R.id.pageProgressBar)
+        errorContainer = findViewById(R.id.errorContainer)
+        btnRetry = findViewById(R.id.btnRetry)
+        txtDomain = findViewById(R.id.txtDomain)
+        txtAdBlockBadge = findViewById(R.id.txtAdBlockBadge)
+        btnAdBlockStatus = findViewById(R.id.btnAdBlockStatus)
+        btnRefresh = findViewById(R.id.btnRefresh)
+        btnSettings = findViewById(R.id.btnSettings)
+        mediaRouteButton = findViewById(R.id.mediaRouteButton)
+
+        composeSettingsView = findViewById(R.id.composeSettingsView)
+
+        castStreamBanner = findViewById(R.id.castStreamBanner)
+        txtCastStreamInfo = findViewById(R.id.txtCastStreamInfo)
+        btnCastNow = findViewById(R.id.btnCastNow)
+        btnCloseCastBanner = findViewById(R.id.btnCloseCastBanner)
+
+        fullscreenContainer = findViewById(R.id.fullscreenContainer)
+        fullscreenOverlayControls = findViewById(R.id.fullscreenOverlayControls)
+        btnExitFullscreen = findViewById(R.id.btnExitFullscreen)
+        btnPipFullscreen = findViewById(R.id.btnPipFullscreen)
+
+        txtDomain.text = addressManager.currentHost ?: "Adres Ayarlanmadı"
+
+        // Retry on connection error
+        btnRetry.setOnClickListener {
+            errorContainer.visibility = View.GONE
+            webView.visibility = View.VISIBLE
+            val target = addressManager.currentUrl
+            if (!target.isNullOrBlank()) {
+                webView.loadUrl(target)
+            } else {
+                showSetupUrlScreen()
+            }
+        }
+
+        // Open Compose Settings UI from shield badge or settings icon
+        btnAdBlockStatus.setOnClickListener {
+            showSettingsScreen()
+        }
+        btnSettings.setOnClickListener {
+            showSettingsScreen()
+        }
+        updateBadgeCount()
+
+        // Top bar refresh
+        btnRefresh.setOnClickListener {
+            webView.reload()
+        }
+
+        // Fullscreen Controls
+        btnExitFullscreen.setOnClickListener {
+            customViewCallback?.onCustomViewHidden()
+            onHideCustomView()
+        }
+
+        btnPipFullscreen.setOnClickListener {
+            enterPipMode()
+        }
+
+        // Cast Stream Banner Actions
+        btnCastNow.setOnClickListener {
+            lastDetectedVideoUrl?.let { url ->
+                val title = webView.title ?: lastDetectedVideoTitle
+                castVideo(url, title)
+            }
+        }
+
+        btnCloseCastBanner.setOnClickListener {
+            castStreamBanner.visibility = View.GONE
+        }
+    }
+
+    private fun showSetupUrlScreen() {
+        composeSettingsView.visibility = View.VISIBLE
+        composeSettingsView.setContent {
+            SetupUrlScreen(
+                addressManager = addressManager,
+                onUrlConfigured = { url ->
+                    composeSettingsView.visibility = View.GONE
+                    updateActiveProfile(url)
+                    webView.loadUrl(url)
+                }
+            )
+        }
+    }
+
+    private fun showSettingsScreen() {
+        composeSettingsView.visibility = View.VISIBLE
+        composeSettingsView.setContent {
+            SettingsScreen(
+                adBlocker = adBlocker,
+                addressManager = addressManager,
+                onDismiss = {
+                    composeSettingsView.visibility = View.GONE
+                    updateBadgeCount()
+                },
+                onUrlSelected = { url ->
+                    composeSettingsView.visibility = View.GONE
+                    updateActiveProfile(url)
+                    webView.loadUrl(url)
+                },
+                onClearSiteData = {
+                    clearSiteData()
+                },
+                onShareNetworkLogs = {
+                    shareNetworkLogs()
+                },
+                onUpdateBlocklist = {
+                    adBlocker.updateRemoteBlocklist()
+                }
+            )
+        }
+    }
+
+    private fun updateActiveProfile(url: String) {
+        val host = try {
+            Uri.parse(url).host ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+        val profile = profileManager.getProfileForHost(host)
+        adBlocker.currentProfile = profile
+        txtDomain.text = if (host.isNotBlank()) host else "Adres Tanımsız"
+    }
+
+    private fun clearSiteData() {
+        try {
+            val cookieManager = CookieManager.getInstance()
+            cookieManager.removeAllCookies(null)
+            cookieManager.flush()
+            webView.clearCache(true)
+            webView.clearFormData()
+            webView.clearHistory()
+            WebStorage.getInstance().deleteAllData()
+            Toast.makeText(this, "Site verileri, çerezler ve önbellek temizlendi", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error clearing site data", e)
+        }
+    }
+
+    private fun shareNetworkLogs() {
+        val logs = NetworkLogger.exportLogsAsText()
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "Dizilla Ağ İstek Günlüğü (Son 500 İstek)")
+            putExtra(Intent.EXTRA_TEXT, logs)
+        }
+        startActivity(Intent.createChooser(sendIntent, "İstek Günlüğünü Paylaş"))
+    }
+
+    private fun setupCast() {
+        try {
+            castContext = CastContext.getSharedInstance(this)
+            CastButtonFactory.setUpMediaRouteButton(applicationContext, mediaRouteButton)
+            castContext?.sessionManager?.addSessionManagerListener(sessionManagerListener, CastSession::class.java)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Cast SDK initialization skipped or unavailable: ${t.message}")
+            try {
+                mediaRouteButton.visibility = View.GONE
+            } catch (_: Throwable) {}
+        }
+    }
+
+    private fun setupSwipeRefresh() {
+        swipeRefreshLayout.setColorSchemeColors(
+            0xFF06B6D4.toInt(),
+            0xFF3B82F6.toInt(),
+            0xFF8B5CF6.toInt()
+        )
+        swipeRefreshLayout.setProgressBackgroundColorSchemeColor(0xFF1F2937.toInt())
+
+        swipeRefreshLayout.setOnRefreshListener {
+            webView.reload()
+        }
+
+        // Allow pull to refresh only when webView is at the top
+        webView.viewTreeObserver.addOnScrollChangedListener {
+            swipeRefreshLayout.isEnabled = (webView.scrollY == 0 && customView == null && composeSettingsView.visibility != View.VISIBLE)
+        }
+    }
+
+    private fun setupBackNavigation() {
+        onBackPressedDispatcher.addCallback(this) {
+            when {
+                composeSettingsView.visibility == View.VISIBLE -> {
+                    if (addressManager.currentUrl.isNullOrBlank()) {
+                        finish()
+                    } else {
+                        composeSettingsView.visibility = View.GONE
+                        updateBadgeCount()
+                    }
+                }
+                customView != null -> {
+                    customViewCallback?.onCustomViewHidden()
+                    onHideCustomView()
+                }
+                webView.canGoBack() -> {
+                    webView.goBack()
+                }
+                else -> {
+                    finish()
+                }
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun setupWebView() {
+        try {
+            webView.setLayerType(View.LAYER_TYPE_NONE, null)
+        } catch (_: Throwable) {}
+
+        val settings = webView.settings
+        settings.javaScriptEnabled = true
+        settings.domStorageEnabled = true
+        settings.databaseEnabled = true
+        settings.mediaPlaybackRequiresUserGesture = false
+        settings.userAgentString = MOBILE_USER_AGENT
+        settings.setSupportMultipleWindows(true)
+        settings.cacheMode = WebSettings.LOAD_DEFAULT
+        settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+
+        // Tracking prevention
+        val cookieManager = CookieManager.getInstance()
+        cookieManager.setAcceptCookie(true)
+        cookieManager.setAcceptThirdPartyCookies(webView, false)
+
+        settings.saveFormData = false
+        try {
+            settings.safeBrowsingEnabled = false
+        } catch (e: Exception) {
+            // Ignored if unsupported
+        }
+
+        // Cosmetic script injection at document start if supported
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            try {
+                WebViewCompat.addDocumentStartJavaScript(
+                    webView,
+                    adBlocker.getEffectiveCosmeticScript(),
+                    setOf("*")
+                )
+                Log.d(TAG, "DocumentStartJavaScript injected successfully.")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to register DocumentStartJavaScript", e)
+            }
+        }
+
+        // Javascript Bridge for video stream & player discovery (SPA & Debug)
+        webView.addJavascriptInterface(object {
+            @JavascriptInterface
+            fun onVideoDetected(src: String?) {
+                if (!src.isNullOrBlank()) {
+                    runOnUiThread { onVideoStreamFound(src) }
+                }
+            }
+
+            @JavascriptInterface
+            fun onPlayerInfoDiscovered(jsonData: String?) {
+                if (!jsonData.isNullOrBlank()) {
+                    Log.d("PlayerInfo", "================ PLAYER INFO DISCOVERED ================")
+                    Log.d("PlayerInfo", jsonData)
+                    Log.d("PlayerInfo", "=========================================================")
+                }
+            }
+        }, "DizillaNative")
+
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                if (newProgress < 100) {
+                    pageProgressBar.visibility = View.VISIBLE
+                    pageProgressBar.progress = newProgress
+                } else {
+                    pageProgressBar.visibility = View.GONE
+                    swipeRefreshLayout.isRefreshing = false
+                }
+            }
+
+            override fun onCreateWindow(
+                view: WebView?,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: Message?
+            ): Boolean {
+                // Prevent popup ad windows and redirects
+                Log.d("AdBlock", "Blocked popup window request (isUserGesture=$isUserGesture)")
+                return false
+            }
+
+            override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                this@MainActivity.onShowCustomView(view, callback)
+            }
+
+            override fun onHideCustomView() {
+                this@MainActivity.onHideCustomView()
+            }
+        }
+
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): WebResourceResponse? {
+                val uri = request?.url ?: return null
+                val uriString = uri.toString().lowercase(Locale.ROOT)
+
+                // Detect video stream URLs
+                if (uriString.contains(".m3u8") || uriString.contains(".mp4") ||
+                    uriString.contains("/hls/") || uriString.contains("videoplayback") ||
+                    uriString.contains(".mp4?") || uriString.contains(".m3u8?")) {
+                    runOnUiThread {
+                        onVideoStreamFound(uri.toString())
+                    }
+                }
+
+                // Determine request type for discovery mode NetLog
+                val headers = request?.requestHeaders
+                val acceptHeader = headers?.get("Accept") ?: ""
+                val isMainFrame = request?.isForMainFrame == true
+
+                val requestType = when {
+                    uriString.contains(".m3u8") || uriString.contains(".mp4") || uriString.contains("/hls/") || uriString.contains("videoplayback") -> "media"
+                    uriString.contains(".js") || acceptHeader.contains("javascript") -> "script"
+                    !isMainFrame && (uriString.contains("embed") || uriString.contains("player") || acceptHeader.contains("text/html")) -> "iframe"
+                    headers?.get("X-Requested-With") != null || acceptHeader.contains("application/json") -> "xhr"
+                    uriString.contains(".png") || uriString.contains(".jpg") || uriString.contains(".jpeg") || uriString.contains(".webp") || uriString.contains(".svg") -> "image"
+                    uriString.contains(".css") -> "stylesheet"
+                    isMainFrame -> "document"
+                    else -> "other"
+                }
+
+                // AdBlocker network check with NetLog recording
+                val blockedResponse = adBlocker.shouldIntercept(uri, requestType)
+                if (blockedResponse != null) {
+                    runOnUiThread {
+                        updateBadgeCount()
+                    }
+                    return blockedResponse
+                }
+
+                return null
+            }
+
+            override fun shouldOverrideUrlLoading(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): Boolean {
+                val uri = request?.url ?: return false
+                val scheme = uri.scheme?.lowercase(Locale.ROOT)
+                val host = uri.host?.lowercase(Locale.ROOT) ?: ""
+
+                // Block external application intents and market links
+                if (scheme != "http" && scheme != "https") {
+                    Log.d("AdBlock", "Blocked non-web scheme navigation: $uri")
+                    return true
+                }
+
+                // Google Sign-In Support (accounts.google.com)
+                if (host == "accounts.google.com" || host.endsWith(".google.com") || host.endsWith(".google.com.tr") || host.endsWith(".youtube.com")) {
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
+                    Log.d("AdBlock", "Allowing Google Sign-In navigation: $uri")
+                    return false
+                } else {
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false)
+                }
+
+                // Block if in active profile or global blocklist
+                if (adBlocker.isBlocked(host) != null) {
+                    Log.d("AdBlock", "Blocked navigation to blocked domain: $host")
+                    return true
+                }
+
+                // Dynamic same-site policy or allowlist check
+                if (addressManager.isSameSite(host) || adBlocker.isAllowed(host)) {
+                    return false
+                }
+
+                // Top-level domain change detection (301/302 or brand migration)
+                if (request?.isForMainFrame == true) {
+                    val currentBrand = addressManager.currentHost?.let { ProfileManager.extractBrandTag(it) } ?: ""
+                    val targetBrand = ProfileManager.extractBrandTag(host)
+
+                    val isBrandMatch = currentBrand.isNotEmpty() && currentBrand.equals(targetBrand, ignoreCase = true)
+                    val isFlexible = addressManager.sameSiteMode == SameSiteMode.FLEXIBLE
+
+                    if (isBrandMatch || isFlexible) {
+                        promptDomainMigration(host, uri.toString())
+                        return true
+                    }
+                }
+
+                // Block rogue redirect ads to unrelated external domains
+                Log.d("AdBlock", "Blocked rogue navigation redirect to: $uri")
+                return true
+            }
+
+            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                errorContainer.visibility = View.GONE
+                webView.visibility = View.VISIBLE
+                view?.evaluateJavascript(adBlocker.getEffectiveCosmeticScript(), null)
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                swipeRefreshLayout.isRefreshing = false
+                view?.evaluateJavascript(adBlocker.getEffectiveCosmeticScript(), null)
+            }
+
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?
+            ) {
+                if (request?.isForMainFrame == true) {
+                    webView.visibility = View.GONE
+                    errorContainer.visibility = View.VISIBLE
+                    swipeRefreshLayout.isRefreshing = false
+                }
+            }
+        }
+    }
+
+    private fun promptDomainMigration(newHost: String, targetUrl: String) {
+        runOnUiThread {
+            AlertDialog.Builder(this)
+                .setTitle("Site Adresi Değişti")
+                .setMessage("Site adresi şuna yönlendirildi:\n$newHost\n\nAktif site adresi ve kurallar bu adrese güncellensin mi?\n\n(Not: Güvenlik gereği çerezler yeni adrese aktarılmayabilir, tekrar oturum açmanız gerekebilir.)")
+                .setPositiveButton("Güncelle ve Aç") { _, _ ->
+                    addressManager.currentUrl = targetUrl
+                    updateActiveProfile(targetUrl)
+                    webView.loadUrl(targetUrl)
+                }
+                .setNegativeButton("Engelle ve İptal Et", null)
+                .show()
+        }
+    }
+
+    private fun updateBadgeCount() {
+        val count = adBlocker.blockedCount.get()
+        txtAdBlockBadge.text = count.toString()
+    }
+
+    private fun onVideoStreamFound(url: String) {
+        lastDetectedVideoUrl = url
+        lastDetectedVideoTitle = webView.title ?: "Dizilla Video"
+        txtCastStreamInfo.text = "Akış: ${Uri.parse(url).host ?: "Video"}"
+        castStreamBanner.visibility = View.VISIBLE
+
+        // Auto cast if Cast Session is actively connected
+        currentCastSession?.let { session ->
+            if (session.isConnected) {
+                castVideo(url, lastDetectedVideoTitle)
+            }
+        }
+    }
+
+    fun castVideo(videoUrl: String, title: String) {
+        val session = currentCastSession ?: castContext?.sessionManager?.currentCastSession
+        if (session == null || !session.isConnected) {
+            mediaRouteButton.performClick()
+            Toast.makeText(this, "Yayınlamak için bir Chromecast cihazı seçin", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val remoteMediaClient = session.remoteMediaClient
+        if (remoteMediaClient == null) {
+            Toast.makeText(this, "Cast istemcisine bağlanılamadı", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val metadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_MOVIE).apply {
+            putString(MediaMetadata.KEY_TITLE, title)
+            putString(MediaMetadata.KEY_SUBTITLE, "Dizilla Akışı")
+        }
+
+        val isHls = videoUrl.contains(".m3u8")
+        val contentType = if (isHls) "application/x-mpegURL" else "video/mp4"
+
+        val mediaInfo = MediaInfo.Builder(videoUrl)
+            .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
+            .setContentType(contentType)
+            .setMetadata(metadata)
+            .build()
+
+        remoteMediaClient.load(mediaInfo, MediaLoadOptions.Builder().setAutoplay(true).build())
+        Toast.makeText(this, "TV'de oynatılıyor: $title", Toast.LENGTH_LONG).show()
+        castStreamBanner.visibility = View.GONE
+    }
+
+    // Fullscreen View Handlers
+    private fun onShowCustomView(view: View?, callback: WebChromeClient.CustomViewCallback?) {
+        if (customView != null) {
+            callback?.onCustomViewHidden()
+            return
+        }
+
+        customView = view
+        customViewCallback = callback
+
+        mainContentContainer.visibility = View.GONE
+        fullscreenContainer.addView(
+            view,
+            0,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        fullscreenContainer.visibility = View.VISIBLE
+        fullscreenOverlayControls.visibility = View.VISIBLE
+
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        setSystemBarsVisible(false)
+
+        updatePiPParams()
+    }
+
+    private fun onHideCustomView() {
+        if (customView == null) return
+
+        fullscreenContainer.removeView(customView)
+        customView = null
+        customViewCallback?.onCustomViewHidden()
+        customViewCallback = null
+
+        fullscreenContainer.visibility = View.GONE
+        mainContentContainer.visibility = View.VISIBLE
+
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        setSystemBarsVisible(true)
+    }
+
+    private fun setSystemBarsVisible(visible: Boolean) {
+        val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
+        if (visible) {
+            windowInsetsController.show(WindowInsetsCompat.Type.systemBars())
+        } else {
+            windowInsetsController.hide(WindowInsetsCompat.Type.systemBars())
+            windowInsetsController.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    private fun updatePiPParams() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val builder = PictureInPictureParams.Builder()
+                .setAspectRatio(Rational(16, 9))
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                builder.setAutoEnterEnabled(customView != null)
+            }
+            setPictureInPictureParams(builder.build())
+        }
+    }
+
+    private fun enterPipMode() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val params = PictureInPictureParams.Builder()
+                .setAspectRatio(Rational(16, 9))
+                .build()
+            enterPictureInPictureMode(params)
+        } else {
+            Toast.makeText(this, "PiP modu bu Android sürümünde desteklenmiyor", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (customView != null) {
+            enterPipMode()
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (isInPictureInPictureMode) {
+            fullscreenOverlayControls.visibility = View.GONE
+            topBar.visibility = View.GONE
+            setSystemBarsVisible(false)
+        } else {
+            if (customView != null) {
+                fullscreenOverlayControls.visibility = View.VISIBLE
+                setSystemBarsVisible(false)
+            } else {
+                topBar.visibility = View.VISIBLE
+                setSystemBarsVisible(true)
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        try {
+            castContext?.sessionManager?.removeSessionManagerListener(sessionManagerListener, CastSession::class.java)
+        } catch (e: Exception) {}
+        webView.destroy()
+        super.onDestroy()
+    }
+}

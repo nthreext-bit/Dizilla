@@ -1,0 +1,33 @@
+# Allowlist for Dizilla
+# Critical site domains, visual asset CDN, and authentication
+
+# 1. Dizilla Core Domains
+dizilla.now
+dizilla.nl
+
+# 2. Site Visuals & Media Storage (Macellan Online)
+macellan.online
+file.macellan.online
+
+# 3. Google Sign-In & Authentication
+accounts.google.com
+accounts.youtube.com
+ssl.gstatic.com
+apis.google.com
+
+# 4. Essential Web Resources & CDNs
+cloudflare.com
+cdnjs.cloudflare.com
+jsdelivr.net
+fonts.googleapis.com
+fonts.gstatic.com
+gstatic.com
+
+# ==============================================================================
+# 5. Video Player & Streaming CDN Domains (Discovered via Debug/PlayerInfo mode)
+# Add discovered streaming video/iframe hosts below:
+# ==============================================================================
+# (Boş bırakıldı - Keşif modunda NetLog ve PlayerInfo loglarından tespit edilenler buraya eklenecek)
+# vidmoly.me
+# closeload.com
+# streamtape.com

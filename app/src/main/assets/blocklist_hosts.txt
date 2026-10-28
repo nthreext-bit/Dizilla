@@ -1,0 +1,125 @@
+# Ad & Tracker Blocklist for Dizilla
+# Common Ad Networks, Trackers, Pop-unders and Ad Servers
+
+# Google Ads & Analytics
+doubleclick.net
+googleads.g.doubleclick.net
+pagead2.googlesyndication.com
+adservice.google.com
+pubads.g.doubleclick.net
+googletagservices.com
+google-analytics.com
+googletagmanager.com
+analytics.google.com
+stats.g.doubleclick.net
+fundingchoicesmessages.google.com
+
+# Facebook / Meta
+connect.facebook.net
+pixel.facebook.com
+an.facebook.com
+
+# Yandex Metrica & Ads
+mc.yandex.ru
+metrika.yandex.ru
+an.yandex.ru
+yabs.yandex.ru
+
+# Analytics & Trackers
+hotjar.com
+static.hotjar.com
+segment.io
+mixpanel.com
+amplitude.com
+newrelic.com
+scorecardresearch.com
+quantserve.com
+
+# Content Recommendation / Native Ads
+taboola.com
+outbrain.com
+revcontent.com
+mgid.com
+content.ad
+zergnet.com
+
+# Pop-unders, Push & Malicious Ad Networks
+popads.net
+popcash.net
+propellerads.com
+propu.sh
+adsterra.com
+exoclick.com
+juicyads.com
+adcash.com
+clickadu.com
+trafficjunky.com
+ad-maven.com
+yllix.com
+monetag.com
+hilltopads.com
+richpush.co
+clickaine.com
+galaksion.com
+rollerads.com
+clickstar.biz
+evadav.com
+clickadilla.com
+adkernel.com
+bidvertiser.com
+adxad.com
+adpv.com
+trafmag.com
+syndication.exoclick.com
+
+# Gambling & Betting Ads
+1xbet.com
+bet365.com
+bets10.com
+casinomaxi.com
+melbet.com
+mostbet.com
+linebet.com
+parimatch.com
+bahis.com
+
+# VAST & Video Ad Servers
+imasdk.googleapis.com
+innovid.com
+spotxchange.com
+springserve.com
+smartadserver.com
+openx.net
+rubiconproject.com
+adnxs.com
+criteo.com
+casalemedia.com
+media.net
+yieldmo.com
+teads.tv
+aniview.com
+vidazoo.com
+streamrail.com
+stickyads.tv
+pubmatic.com
+tremorhub.com
+tremorvideo.com
+unruly.co
+
+# Turkish & Regional Streaming Ad Networks
+reklamstore.com
+adhood.com
+viralstat.com
+adclick.com
+adcolony.com
+bidswitch.net
+adtrue.com
+clickio.com
+rekmob.com
+medyanet.com
+dogannet.com
+admatic.com.tr
+reklam9.com
+adnow.com
+bidgear.com
+adplus.com.tr
