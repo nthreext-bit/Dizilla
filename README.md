@@ -44,3 +44,9 @@ TV modunda Cast, PiP ve aşağı çekip yenileme kapalıdır; masaüstü görün
 - `WebViewInfo`: WebView paketi/sürümü ve kullanılan kullanıcı ajanı
 - `NetLog`: her ağ isteği (engellendi/geçti)
 - `PlayerInfo`: sayfadaki iframe ve video kaynakları
+
+## APK'yı GitHub'da derletme (bilgisayarda Android Studio olmadan)
+
+1. Projeyi GitHub deponuza yükleyin (`.github/workflows/build-apk.yml` dahil).
+2. Depoda **Actions > Build APK > Run workflow** ile çalıştırın (main'e push de tetikler).
+3. İş bitince sayfanın altındaki **Artifacts** bölümünden `Dizilla-debug-apk` dosyasını indirin, içinden `app-debug.apk` çıkar.
