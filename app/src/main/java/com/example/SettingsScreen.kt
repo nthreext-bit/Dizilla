@@ -103,6 +103,8 @@ fun SettingsScreen(
     var currentActiveUrl by remember { mutableStateOf(addressManager.currentUrl ?: "") }
     var sameSiteMode by remember { mutableStateOf(addressManager.sameSiteMode) }
     var recentUrls by remember { mutableStateOf(addressManager.getRecentUrls()) }
+    var tvModeSetting by remember { mutableStateOf(addressManager.tvMode) }
+    var uaModeSetting by remember { mutableStateOf(addressManager.uaMode) }
 
     // Dialog states
     var showChangeUrlDialog by remember { mutableStateOf(false) }
@@ -642,6 +644,52 @@ fun SettingsScreen(
                     }
                 }
 
+                // SECTION 3b: TV Modu & Görünüm (Kumanda)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "TV Modu & Görünüm",
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            fontSize = 15.sp
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Değişiklikler uygulama yeniden açılınca geçerli olur. TV modunda sanal imleç, masaüstü görünüm ve yatay ekran kullanılır; Cast ve PiP kapanır. Menü veya Info tuşu imleç/odak modunu değiştirir.",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 11.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("TV modu:", color = Color(0xFFE2E8F0), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OptionRow(
+                            options = listOf("Otomatik" to TvMode.AUTO, "Açık" to TvMode.ON, "Kapalı" to TvMode.OFF),
+                            selected = tvModeSetting,
+                            onSelect = {
+                                tvModeSetting = it
+                                addressManager.tvMode = it
+                            }
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("Site görünümü:", color = Color(0xFFE2E8F0), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OptionRow(
+                            options = listOf("Otomatik" to UaMode.AUTO, "Mobil" to UaMode.MOBILE, "Masaüstü" to UaMode.DESKTOP),
+                            selected = uaModeSetting,
+                            onSelect = {
+                                uaModeSetting = it
+                                addressManager.uaMode = it
+                            }
+                        )
+                    }
+                }
+
                 // SECTION 4: Keşif Modu & Log Sharing
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -743,6 +791,41 @@ fun SettingsScreen(
                 Toast.makeText(context, "Listeler varsayılana sıfırlandı", Toast.LENGTH_SHORT).show()
             }
         )
+    }
+}
+
+/** Kumandayla seçilebilir (focusable) yatay seçenek satırı. */
+@Composable
+fun <T> OptionRow(
+    options: List<Pair<String, T>>,
+    selected: T,
+    onSelect: (T) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        options.forEach { (label, value) ->
+            val isSelected = value == selected
+            if (isSelected) {
+                Button(
+                    onClick = { onSelect(value) },
+                    modifier = Modifier.weight(1f).focusable(),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0891B2))
+                ) {
+                    Text(label, fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            } else {
+                OutlinedButton(
+                    onClick = { onSelect(value) },
+                    modifier = Modifier.weight(1f).focusable(),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(label, fontSize = 12.sp, color = Color(0xFF94A3B8))
+                }
+            }
+        }
     }
 }
 

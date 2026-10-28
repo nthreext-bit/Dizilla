@@ -324,6 +324,13 @@
         </RelativeLayout>
     </FrameLayout>
 
+    <!-- Kumanda sanal imleci (yalnızca TV modunda görünür) -->
+    <com.example.CursorView
+        android:id="@+id/cursorView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
     <!-- Jetpack Compose Settings Overlay -->
     <androidx.compose.ui.platform.ComposeView
         android:id="@+id/composeSettingsView"

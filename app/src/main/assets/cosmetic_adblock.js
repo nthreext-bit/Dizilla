@@ -13,10 +13,13 @@
     } catch(e) {}
 
     // 2. Inject CSS rules to hide ad elements
+    // Not: "ads" gibi kısa alt dizgiler "uploads", "heads" gibi sözcükleri de eşleştirdiği için
+    // iframe seçicileri host/yol sınırlarına bağlandı (player iframe'i yanlışlıkla gizlenmesin).
     const adStyles = `
-        iframe[src*="ads"], iframe[src*="doubleclick"], iframe[src*="adsterra"],
+        iframe[src*="//ads."], iframe[src*=".ads."], iframe[src*="/ads/"], iframe[src*="/adserver"],
+        iframe[src*="doubleclick"], iframe[src*="adsterra"],
         iframe[src*="popads"], iframe[src*="propeller"], iframe[src*="exoclick"],
-        [id*="banner"], [id*="reklam"], [class*="adsbox"], [class*="reklam"],
+        [id*="ad-banner"], [id^="banner-ad"], [id*="reklam"], [class*="adsbox"], [class*="reklam"],
         [class*="ad-banner"], [id*="ad-container"], [class*="banner-ads"],
         [class*="ad_box"], [id*="overlay-ad"], [class*="pop-overlay"],
         [class*="video-ads"], [id*="video-ad"], .preroll-ad, .ad-countdown,
@@ -47,16 +50,35 @@
     if (document.head) injectCSS();
     else document.addEventListener('DOMContentLoaded', injectCSS);
 
+    // Reklam öğesi mi? "ad" yalnızca ayrı bir sözcük (ad, ads, advert, reklam...) olarak eşleşir;
+    // "loading", "header", "ready" gibi sözcükler ve oynatıcının skip/ileri-geri düğmeleri etkilenmez.
+    const AD_TOKEN = /(^|[\s_-])(ad|ads|advert|advertisement|reklam|preroll|adskip|skip-ad|ad-skip|ad-countdown|ad-timer)($|[\s_-])/i;
+    function isAdLike(el) {
+        const cls = (el.getAttribute && el.getAttribute('class')) || '';
+        const id = el.id || '';
+        return AD_TOKEN.test(cls) || AD_TOKEN.test(id);
+    }
+
     // 3. Click-hijack & Transparent Overlay Remover
+    // Performans: tüm div/a/span yerine yalnızca body'nin 2 seviye altındaki öğeler taranır.
     function removeClickHijackers() {
         try {
-            const allDivs = document.querySelectorAll('div, a, span');
+            if (!document.body) return;
             const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
             const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+            const candidates = [];
+            const top = document.body.children;
+            for (let i = 0; i < top.length; i++) {
+                candidates.push(top[i]);
+                const kids = top[i].children;
+                for (let j = 0; j < kids.length && j < 30; j++) candidates.push(kids[j]);
+            }
 
-            for (let i = 0; i < allDivs.length; i++) {
-                const el = allDivs[i];
-                if (el.tagName === 'VIDEO' || el.querySelector('video') || el.querySelector('iframe')) continue;
+            for (let i = 0; i < candidates.length; i++) {
+                const el = candidates[i];
+                const tag = el.tagName;
+                if (tag !== 'DIV' && tag !== 'A' && tag !== 'SPAN') continue;
+                if (el.querySelector('video') || el.querySelector('iframe')) continue;
                 if (el.classList.contains('jw-wrapper') || el.classList.contains('vjs-tech')) continue;
 
                 const style = window.getComputedStyle(el);
@@ -67,7 +89,7 @@
                         if (rect.width >= vw * 0.7 && rect.height >= vh * 0.7) {
                             const bg = style.backgroundColor;
                             const isTransparent = bg === 'transparent' || bg.includes('rgba(0, 0, 0, 0)') || parseFloat(style.opacity) < 0.1;
-                            const hasNoVisibleText = el.innerText.trim().length === 0;
+                            const hasNoVisibleText = (el.innerText || '').trim().length === 0;
 
                             if (isTransparent || hasNoVisibleText) {
                                 console.log('[AdBlock] Removed click-hijack overlay:', el);
@@ -80,20 +102,56 @@
         } catch(e) {}
     }
 
-    // 4. Video Pre-roll Ad Cleanup
+    // 4. Video Pre-roll Ad Cleanup (yalnızca gerçekten reklam gibi görünen kardeş öğeler)
     function cleanVideoAdOverlays() {
         try {
             const videos = document.querySelectorAll('video');
             videos.forEach(v => {
                 const parent = v.parentElement;
-                if (parent) {
-                    const overlays = parent.querySelectorAll('[id*="ad"], [class*="ad"], [class*="skip"], [id*="skip"], [class*="countdown"]');
-                    overlays.forEach(overlay => {
-                        if (overlay !== v && !overlay.contains(v)) {
-                            console.log('[AdBlock] Removed video pre-roll ad overlay:', overlay);
-                            overlay.remove();
-                        }
-                    });
+                if (!parent) return;
+                const kids = parent.children;
+                for (let i = kids.length - 1; i >= 0; i--) {
+                    const overlay = kids[i];
+                    if (overlay === v || overlay.contains(v)) continue;
+                    if (isAdLike(overlay)) {
+                        console.log('[AdBlock] Removed video pre-roll ad overlay:', overlay);
+                        overlay.remove();
+                    }
+                }
+            });
+        } catch(e) {}
+    }
+
+    // 5. Video Detection including iframes (same-origin check)
+    const notified = new Set();
+    function notifyVideoFound(url) {
+        if (!url || notified.has(url)) return;
+        notified.add(url);
+        if (window.DizillaNative && window.DizillaNative.onVideoDetected) {
+            window.DizillaNative.onVideoDetected(url);
+        }
+    }
+
+    function detectVideoElements() {
+        try {
+            const videos = document.querySelectorAll('video');
+            videos.forEach(v => {
+                if (v.src && v.src.startsWith('http')) notifyVideoFound(v.src);
+                const source = v.querySelector('source');
+                if (source && source.src && source.src.startsWith('http')) notifyVideoFound(source.src);
+            });
+
+            const iframes = document.querySelectorAll('iframe');
+            iframes.forEach(iframe => {
+                try {
+                    const doc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
+                    if (doc) {
+                        doc.querySelectorAll('video').forEach(iv => {
+                            if (iv.src && iv.src.startsWith('http')) notifyVideoFound(iv.src);
+                        });
+                    }
+                } catch(crossOriginErr) {
+                    // Cross-origin iframe handled via WebView shouldInterceptRequest
                 }
             });
         } catch(e) {}
@@ -106,45 +164,14 @@
         detectVideoElements();
     }
 
-    // 5. Video Detection including iframes (same-origin check)
-    function detectVideoElements() {
-        try {
-            // Check top level videos
-            const videos = document.querySelectorAll('video');
-            videos.forEach(v => {
-                if (v.src && v.src.startsWith('http')) {
-                    notifyVideoFound(v.src);
-                }
-                const source = v.querySelector('source');
-                if (source && source.src && source.src.startsWith('http')) {
-                    notifyVideoFound(source.src);
-                }
-            });
-
-            // Check iframes
-            const iframes = document.querySelectorAll('iframe');
-            iframes.forEach(iframe => {
-                try {
-                    const doc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
-                    if (doc) {
-                        const iframeVideos = doc.querySelectorAll('video');
-                        iframeVideos.forEach(iv => {
-                            if (iv.src && iv.src.startsWith('http')) {
-                                notifyVideoFound(iv.src);
-                            }
-                        });
-                    }
-                } catch(crossOriginErr) {
-                    // Cross-origin iframe handled via WebView shouldInterceptRequest
-                }
-            });
-        } catch(e) {}
-    }
-
-    function notifyVideoFound(url) {
-        if (window.DizillaNative && window.DizillaNative.onVideoDetected) {
-            window.DizillaNative.onVideoDetected(url);
-        }
+    // Debounce: DOM değişim fırtınasında (özellikle zayıf TV/Pi cihazlarda) en fazla ~5 kez/sn çalışır
+    let cleanupTimer = null;
+    function scheduleCleanup() {
+        if (cleanupTimer) return;
+        cleanupTimer = setTimeout(function() {
+            cleanupTimer = null;
+            runFullCleanup();
+        }, 200);
     }
 
     // 6. Discovery Mode: Gather all iframes and video/source src values
@@ -177,7 +204,7 @@
     // 7. SPA Navigation Interceptor (Next.js history.pushState & replaceState & popstate)
     function onSPANavigation(route) {
         console.log('[AdBlock] SPA route changed to:', route || window.location.pathname);
-        runFullCleanup();
+        scheduleCleanup();
         schedulePlayerInfoDiscovery();
     }
 
@@ -203,16 +230,14 @@
         console.warn('[AdBlock] Failed to wrap history state', e);
     }
 
-    // 8. Permanent MutationObserver for dynamically added videos/iframes/ads
-    const observer = new MutationObserver(() => {
-        runFullCleanup();
-    });
+    // 8. Permanent MutationObserver for dynamically added videos/iframes/ads (debounced)
+    const observer = new MutationObserver(scheduleCleanup);
 
     function startObserver() {
         const target = document.body || document.documentElement;
         if (target) {
             observer.observe(target, { childList: true, subtree: true });
-            runFullCleanup();
+            scheduleCleanup();
             schedulePlayerInfoDiscovery();
         }
     }
@@ -224,5 +249,42 @@
     }
 
     document.addEventListener('play', detectVideoElements, true);
+
+    // 9. Kumanda / medya tuşları için <video> kontrolü.
+    // Native taraf window.__dzMedia('play'|'pause'|'toggle'|'seek+10'|'seek-10'|'fs') çağırır.
+    // Video bu çerçevede yoksa komut alt iframe'lere postMessage ile iletilir (oynatıcılar
+    // genellikle iframe içindedir).
+    function applyMedia(cmd) {
+        try {
+            const v = document.querySelector('video');
+            if (v) {
+                switch (cmd) {
+                    case 'play': v.play(); break;
+                    case 'pause': v.pause(); break;
+                    case 'toggle': if (v.paused) v.play(); else v.pause(); break;
+                    case 'seek+10': v.currentTime = Math.min(isFinite(v.duration) ? v.duration : Infinity, v.currentTime + 10); break;
+                    case 'seek-10': v.currentTime = Math.max(0, v.currentTime - 10); break;
+                    case 'fs':
+                        if (document.fullscreenElement || document.webkitFullscreenElement) {
+                            (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+                        } else {
+                            const t = v.parentElement || v;
+                            const req = t.requestFullscreen || t.webkitRequestFullscreen || v.webkitEnterFullscreen;
+                            if (req) req.call(t);
+                        }
+                        break;
+                }
+                return;
+            }
+            document.querySelectorAll('iframe').forEach(f => {
+                try { f.contentWindow.postMessage({ __dz: cmd }, '*'); } catch (e) {}
+            });
+        } catch (e) {}
+    }
+    window.__dzMedia = applyMedia;
+    window.addEventListener('message', function(e) {
+        const d = e.data;
+        if (d && typeof d === 'object' && typeof d.__dz === 'string') applyMedia(d.__dz);
+    });
 
 })();

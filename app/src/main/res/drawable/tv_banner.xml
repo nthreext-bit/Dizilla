@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android TV ana ekran afişi (320x180 oranında): koyu zemin üstünde uygulama simgesi -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#111827" />
+        </shape>
+    </item>
+    <item
+        android:width="110dp"
+        android:height="110dp"
+        android:gravity="center"
+        android:drawable="@drawable/dizilla_launcher_icon_1792242421690" />
+</layer-list>

@@ -11,6 +11,12 @@ enum class SameSiteMode {
     FLEXIBLE
 }
 
+/** TV modu: AUTO = cihaz TV ise açık (leanback / televizyon arayüz modu / dokunmatik yok). */
+enum class TvMode { AUTO, ON, OFF }
+
+/** Kullanıcı ajanı: AUTO = TV'de masaüstü, telefonda mobil (site profili de dikkate alınır). */
+enum class UaMode { AUTO, MOBILE, DESKTOP }
+
 class SiteAddressManager(private val context: Context) {
 
     companion object {
@@ -18,6 +24,8 @@ class SiteAddressManager(private val context: Context) {
         private const val KEY_ACTIVE_URL = "active_site_url"
         private const val KEY_RECENT_URLS = "recent_site_urls"
         private const val KEY_SAME_SITE_MODE = "same_site_mode"
+        private const val KEY_TV_MODE = "tv_mode"
+        private const val KEY_UA_MODE = "ua_mode"
         const val MAX_RECENT_URLS = 10
     }
 
@@ -56,6 +64,26 @@ class SiteAddressManager(private val context: Context) {
         }
         set(value) {
             prefs.edit().putString(KEY_SAME_SITE_MODE, value.name).apply()
+        }
+
+    var tvMode: TvMode
+        get() = try {
+            TvMode.valueOf(prefs.getString(KEY_TV_MODE, TvMode.AUTO.name) ?: TvMode.AUTO.name)
+        } catch (e: Exception) {
+            TvMode.AUTO
+        }
+        set(value) {
+            prefs.edit().putString(KEY_TV_MODE, value.name).apply()
+        }
+
+    var uaMode: UaMode
+        get() = try {
+            UaMode.valueOf(prefs.getString(KEY_UA_MODE, UaMode.AUTO.name) ?: UaMode.AUTO.name)
+        } catch (e: Exception) {
+            UaMode.AUTO
+        }
+        set(value) {
+            prefs.edit().putString(KEY_UA_MODE, value.name).apply()
         }
 
     fun getRecentUrls(): List<String> {

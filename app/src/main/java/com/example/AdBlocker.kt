@@ -165,7 +165,10 @@ class AdBlocker(private val context: Context) {
     fun getEffectiveCosmeticScript(): String {
         val extra = currentProfile?.extraCssHideSelectors
         return if (!extra.isNullOrBlank()) {
-            "$baseCosmeticScript\n\n(function() { try { var s = document.createElement('style'); s.innerHTML = '${extra.replace("'", "\\'")} { display: none !important; }'; document.head.appendChild(s); } catch(e){} })();"
+            // Belge başında document.head henüz yoksa DOMContentLoaded'a kadar bekler; seçici metni
+            // JSON olarak güvenle kaçışlanır (tırnak/satır sonu içerse bile bozulmaz).
+            val quoted = org.json.JSONObject.quote("$extra { display: none !important; }")
+            "$baseCosmeticScript\n\n(function() { var css = $quoted; function add() { try { var s = document.createElement('style'); s.setAttribute('data-adblock-extra', 'true'); s.textContent = css; (document.head || document.documentElement).appendChild(s); } catch(e){} } if (document.head) add(); else document.addEventListener('DOMContentLoaded', add); })();"
         } else {
             baseCosmeticScript
         }
@@ -415,34 +418,50 @@ class AdBlocker(private val context: Context) {
                 return@withContext Result.failure(Exception("HTTP Error: ${connection.responseCode}"))
             }
 
-            val newDomains = mutableSetOf<String>()
-            val file = File(context.filesDir, USER_BLOCKLIST_FILE)
-
+            // Önce belleğe indir: bağlantı yarıda kesilirse mevcut liste dosyası bozulmaz.
+            val downloaded = mutableSetOf<String>()
             BufferedReader(InputStreamReader(connection.inputStream)).use { reader ->
-                file.bufferedWriter().use { writer ->
-                    var line = reader.readLine()
-                    while (line != null) {
-                        val clean = cleanDomainLine(line)
-                        if (clean.isNotEmpty() && clean.contains('.')) {
-                            newDomains.add(clean)
-                            writer.write(clean)
-                            writer.newLine()
-                        }
-                        line = reader.readLine()
+                var line = reader.readLine()
+                while (line != null) {
+                    val clean = cleanDomainLine(line)
+                    // "0.0.0.0 0.0.0.0" gibi satırlardaki IP'leri ve alan adı olmayanları atla
+                    if (clean.isNotEmpty() && clean.contains('.') && clean != "0.0.0.0" &&
+                        clean.any { it.isLetter() }) {
+                        downloaded.add(clean)
                     }
+                    line = reader.readLine()
                 }
             }
 
-            if (newDomains.isNotEmpty()) {
+            if (downloaded.isNotEmpty()) {
+                // Kullanıcının ve varsayılan kuralları koru: indirilen liste mevcutlara EKLENİR
+                val merged = HashSet<String>(blocklist.size + downloaded.size)
+                synchronized(blocklist) { merged.addAll(blocklist) }
+                merged.addAll(downloaded)
+
+                // Geçici dosyaya yaz, başarılıysa asıl dosyayla değiştir (atomik)
+                val file = File(context.filesDir, USER_BLOCKLIST_FILE)
+                val tmp = File(context.filesDir, "$USER_BLOCKLIST_FILE.tmp")
+                tmp.bufferedWriter().use { writer ->
+                    for (d in merged) {
+                        writer.write(d)
+                        writer.newLine()
+                    }
+                }
+                if (!tmp.renameTo(file)) {
+                    file.writeText(tmp.readText())
+                    tmp.delete()
+                }
+
                 blocklist.clear()
-                blocklist.addAll(newDomains)
+                blocklist.addAll(merged)
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                     .edit()
                     .putLong(PREF_LAST_UPDATE, System.currentTimeMillis())
                     .apply()
 
-                Log.d(TAG, "Blocklist successfully updated with ${newDomains.size} rules.")
-                return@withContext Result.success(newDomains.size)
+                Log.d(TAG, "Blocklist updated: ${downloaded.size} downloaded, ${merged.size} total rules.")
+                return@withContext Result.success(merged.size)
             } else {
                 return@withContext Result.failure(Exception("Downloaded list was empty"))
             }
