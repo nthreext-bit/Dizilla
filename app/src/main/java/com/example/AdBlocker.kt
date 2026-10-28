@@ -96,6 +96,21 @@ class AdBlocker(private val context: Context) {
     fun loadAllowlist() {
         try {
             val list = mutableSetOf<String>()
+            // Always include baseline allowlist from assets
+            try {
+                context.assets.open("allowlist_hosts.txt").bufferedReader().useLines { lines ->
+                    for (line in lines) {
+                        val clean = cleanDomainLine(line)
+                        if (clean.isNotEmpty()) {
+                            list.add(clean)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load base allowlist from assets", e)
+            }
+
+            // Merge with user-edited allowlist
             val file = File(context.filesDir, USER_ALLOWLIST_FILE)
             if (file.exists()) {
                 file.bufferedReader().useLines { lines ->
@@ -109,7 +124,7 @@ class AdBlocker(private val context: Context) {
             }
             allowlist.clear()
             allowlist.addAll(list)
-            Log.d(TAG, "Loaded ${allowlist.size} user allowlist domains.")
+            Log.d(TAG, "Loaded ${allowlist.size} total allowlist domains.")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load allowlist", e)
         }

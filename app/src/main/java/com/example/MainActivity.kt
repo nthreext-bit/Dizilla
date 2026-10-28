@@ -55,6 +55,9 @@ import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
 import kotlinx.coroutines.launch
+import java.io.ByteArrayInputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
@@ -383,15 +386,18 @@ class MainActivity : AppCompatActivity() {
         settings.domStorageEnabled = true
         settings.databaseEnabled = true
         settings.mediaPlaybackRequiresUserGesture = false
-        settings.userAgentString = MOBILE_USER_AGENT
+
+        val defaultUa = WebSettings.getDefaultUserAgent(this)
+        val cleanUa = defaultUa.replace("; wv", "").replace("Version/4.0 ", "")
+        settings.userAgentString = cleanUa
         settings.setSupportMultipleWindows(true)
         settings.cacheMode = WebSettings.LOAD_DEFAULT
-        settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
 
-        // Tracking prevention
+        // Allow third-party cookies for embedded video players and CDNs
         val cookieManager = CookieManager.getInstance()
         cookieManager.setAcceptCookie(true)
-        cookieManager.setAcceptThirdPartyCookies(webView, false)
+        cookieManager.setAcceptThirdPartyCookies(webView, true)
 
         settings.saveFormData = false
         try {
@@ -506,6 +512,16 @@ class MainActivity : AppCompatActivity() {
                     return blockedResponse
                 }
 
+                // If not blocked, check subframes for X-Frame-Options to eliminate ERR_BLOCKED_BY_RESPONSE
+                if (!isMainFrame && (acceptHeader.contains("text/html") || requestType == "iframe" ||
+                    uriString.contains("embed") || uriString.contains("player") ||
+                    uriString.contains("/e/") || uriString.contains("/w/"))) {
+                    val unblocked = stripFrameBlockingHeaders(request)
+                    if (unblocked != null) {
+                        return unblocked
+                    }
+                }
+
                 return null
             }
 
@@ -523,13 +539,16 @@ class MainActivity : AppCompatActivity() {
                     return true
                 }
 
+                // SUBFRAME / IFRAME CHECK: Never block iframe navigations in shouldOverrideUrlLoading!
+                // Blocking subframes in shouldOverrideUrlLoading causes ERR_BLOCKED_BY_RESPONSE or player load failure.
+                if (request.isForMainFrame == false) {
+                    return false
+                }
+
                 // Google Sign-In Support (accounts.google.com)
                 if (host == "accounts.google.com" || host.endsWith(".google.com") || host.endsWith(".google.com.tr") || host.endsWith(".youtube.com")) {
-                    CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
                     Log.d("AdBlock", "Allowing Google Sign-In navigation: $uri")
                     return false
-                } else {
-                    CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false)
                 }
 
                 // Block if in active profile or global blocklist
@@ -544,17 +563,15 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // Top-level domain change detection (301/302 or brand migration)
-                if (request?.isForMainFrame == true) {
-                    val currentBrand = addressManager.currentHost?.let { ProfileManager.extractBrandTag(it) } ?: ""
-                    val targetBrand = ProfileManager.extractBrandTag(host)
+                val currentBrand = addressManager.currentHost?.let { ProfileManager.extractBrandTag(it) } ?: ""
+                val targetBrand = ProfileManager.extractBrandTag(host)
 
-                    val isBrandMatch = currentBrand.isNotEmpty() && currentBrand.equals(targetBrand, ignoreCase = true)
-                    val isFlexible = addressManager.sameSiteMode == SameSiteMode.FLEXIBLE
+                val isBrandMatch = currentBrand.isNotEmpty() && currentBrand.equals(targetBrand, ignoreCase = true)
+                val isFlexible = addressManager.sameSiteMode == SameSiteMode.FLEXIBLE
 
-                    if (isBrandMatch || isFlexible) {
-                        promptDomainMigration(host, uri.toString())
-                        return true
-                    }
+                if (isBrandMatch || isFlexible) {
+                    promptDomainMigration(host, uri.toString())
+                    return true
                 }
 
                 // Block rogue redirect ads to unrelated external domains
@@ -757,6 +774,114 @@ class MainActivity : AppCompatActivity() {
                 topBar.visibility = View.VISIBLE
                 setSystemBarsVisible(true)
             }
+        }
+    }
+
+    private fun stripFrameBlockingHeaders(request: WebResourceRequest): WebResourceResponse? {
+        val uri = request.url ?: return null
+        val urlStr = uri.toString()
+        val method = request.method ?: "GET"
+        if (!method.equals("GET", ignoreCase = true)) return null
+
+        return try {
+            val url = URL(urlStr)
+            val connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.instanceFollowRedirects = true
+            connection.connectTimeout = 8000
+            connection.readTimeout = 8000
+
+            // Forward request headers
+            request.requestHeaders?.forEach { (key, value) ->
+                try {
+                    connection.setRequestProperty(key, value)
+                } catch (_: Throwable) {}
+            }
+
+            // Ensure proper User-Agent
+            if (connection.getRequestProperty("User-Agent") == null) {
+                connection.setRequestProperty("User-Agent", MOBILE_USER_AGENT)
+            }
+            // Pass Referer if not set
+            if (connection.getRequestProperty("Referer") == null) {
+                addressManager.currentUrl?.let { current ->
+                    connection.setRequestProperty("Referer", current)
+                }
+            }
+
+            // Pass cookies from CookieManager
+            val cookie = CookieManager.getInstance().getCookie(urlStr)
+            if (!cookie.isNullOrBlank()) {
+                connection.setRequestProperty("Cookie", cookie)
+            }
+
+            connection.connect()
+
+            val statusCode = connection.responseCode
+            val statusMessage = connection.responseMessage ?: "OK"
+
+            // Save Set-Cookie headers back into CookieManager
+            val headerFields = connection.headerFields
+            headerFields["Set-Cookie"]?.forEach { c ->
+                try {
+                    CookieManager.getInstance().setCookie(urlStr, c)
+                } catch (_: Throwable) {}
+            }
+            headerFields["set-cookie"]?.forEach { c ->
+                try {
+                    CookieManager.getInstance().setCookie(urlStr, c)
+                } catch (_: Throwable) {}
+            }
+
+            // Strip restrictive frame-blocking headers
+            val responseHeaders = mutableMapOf<String, String>()
+            headerFields.forEach { (key, values) ->
+                if (key != null && values != null && values.isNotEmpty()) {
+                    val lowerKey = key.lowercase(Locale.ROOT)
+                    if (lowerKey != "x-frame-options" &&
+                        lowerKey != "content-security-policy" &&
+                        lowerKey != "content-security-policy-report-only" &&
+                        lowerKey != "cross-origin-resource-policy" &&
+                        lowerKey != "cross-origin-embedder-policy"
+                    ) {
+                        responseHeaders[key] = values.joinToString(", ")
+                    }
+                }
+            }
+            // Allow embedding
+            responseHeaders["Access-Control-Allow-Origin"] = "*"
+            responseHeaders["Cross-Origin-Resource-Policy"] = "cross-origin"
+
+            var mimeType = "text/html"
+            var encoding = "utf-8"
+            val contentType = connection.contentType
+            if (contentType != null) {
+                val parts = contentType.split(";").map { it.trim() }
+                if (parts.isNotEmpty()) mimeType = parts[0]
+                for (part in parts) {
+                    if (part.lowercase(Locale.ROOT).startsWith("charset=")) {
+                        encoding = part.substring(8).trim()
+                    }
+                }
+            }
+
+            val inputStream = if (statusCode in 200..399) {
+                connection.inputStream
+            } else {
+                connection.errorStream ?: ByteArrayInputStream(ByteArray(0))
+            }
+
+            WebResourceResponse(
+                mimeType,
+                encoding,
+                statusCode,
+                if (statusMessage.isBlank()) "OK" else statusMessage,
+                responseHeaders,
+                inputStream
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to proxy frame headers for $urlStr: ${e.message}")
+            null
         }
     }
 

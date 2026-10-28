@@ -4,6 +4,8 @@
 # 1. Dizilla Core Domains
 dizilla.now
 dizilla.nl
+dizilla.com
+dizilla.club
 
 # 2. Site Visuals & Media Storage (Macellan Online)
 macellan.online
@@ -24,10 +26,26 @@ fonts.gstatic.com
 gstatic.com
 
 # ==============================================================================
-# 5. Video Player & Streaming CDN Domains (Discovered via Debug/PlayerInfo mode)
-# Add discovered streaming video/iframe hosts below:
+# 5. Video Player & Streaming CDN Domains
 # ==============================================================================
-# (Boş bırakıldı - Keşif modunda NetLog ve PlayerInfo loglarından tespit edilenler buraya eklenecek)
-# vidmoly.me
-# closeload.com
-# streamtape.com
+vidmoly.me
+vidmoly.to
+vidmoly.net
+molyfile.com
+closeload.com
+closeload.click
+streamtape.com
+supervideo.tv
+filemoon.sx
+filemoon.to
+fastream.to
+streamwish.to
+doodstream.com
+dood.to
+dood.so
+embedrise.com
+luluvdo.com
+vidguard.to
+streamhide.to
+vupload.com
+hls.tedcdn.com
