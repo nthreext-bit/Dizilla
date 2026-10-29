@@ -463,9 +463,14 @@ class MainActivity : AppCompatActivity() {
             webView.reload()
         }
 
-        // Allow pull to refresh only when webView is at the top
-        webView.viewTreeObserver.addOnScrollChangedListener {
-            swipeRefreshLayout.isEnabled = (webView.scrollY == 0 && customView == null && composeSettingsView.visibility != View.VISIBLE)
+        // Use child scroll-up callback to cleanly prevent pull-to-refresh when webView is scrolled,
+        // rather than toggling isEnabled mid-motion which causes "Got ACTION_MOVE event but don't have an active pointer id."
+        swipeRefreshLayout.setOnChildScrollUpCallback { _, _ ->
+            customView != null ||
+            composeSettingsView.visibility == View.VISIBLE ||
+            isPointerMode ||
+            webView.scrollY > 0 ||
+            webView.canScrollVertically(-1)
         }
     }
 
