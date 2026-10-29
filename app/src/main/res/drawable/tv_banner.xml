@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+
+    <!-- Dark TV Banner Background -->
+    <path
+        android:pathData="M0,0h320v180h-320z"
+        android:fillColor="#0F172A" />
+
+    <!-- Accent Gradient Glow -->
+    <path
+        android:pathData="M0,0h160v180h-160z"
+        android:fillColor="#1E293B" />
+
+    <!-- Cyan Decorative Accent Line -->
+    <path
+        android:pathData="M0,174h320v6h-320z"
+        android:fillColor="#06B6D4" />
+
+    <!-- D Letter / Shield Play Icon Geometric Shape -->
+    <!-- Outer Shield / Rounded D -->
+    <path
+        android:pathData="M50,45 h45 c35,0 60,20 60,45 c0,25 -25,45 -60,45 h-45 z"
+        android:fillColor="#06B6D4" />
+
+    <path
+        android:pathData="M65,60 h28 c22,0 42,12 42,30 c0,18 -20,30 -42,30 h-28 z"
+        android:fillColor="#0F172A" />
+
+    <!-- Play triangle in the center of the D -->
+    <path
+        android:pathData="M80,72 L105,90 L80,108 Z"
+        android:fillColor="#38BDF8" />
+
+    <!-- TV Box Title "DIZILLA TV" Dots / Geometric Visual -->
+    <!-- D -->
+    <path
+        android:pathData="M175,65 h18 c12,0 20,8 20,18 c0,10 -8,18 -20,18 h-18 z M183,73 v20 h9 c7,0 12,-4 12,-10 c0,-6 -5,-10 -12,-10 z"
+        android:fillColor="#FFFFFF" />
+
+    <!-- I -->
+    <path
+        android:pathData="M220,65 h8 v36 h-8 z"
+        android:fillColor="#FFFFFF" />
+
+    <!-- Z -->
+    <path
+        android:pathData="M236,65 h24 v7 l-14,22 h14 v7 h-24 v-7 l14,-22 h-14 z"
+        android:fillColor="#FFFFFF" />
+
+    <!-- Subtitle TV BOX -->
+    <path
+        android:pathData="M175,110 h60 v14 h-60 z"
+        android:fillColor="#06B6D4" />
+</vector>

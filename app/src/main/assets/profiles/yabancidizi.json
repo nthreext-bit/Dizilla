@@ -1,0 +1,40 @@
+{
+  "brandTag": "yabancidizi",
+  "allowHosts": [
+    "yabancidizi.watch",
+    "yabancidizi.co",
+    "yabancidizi.pw",
+    "yabancidizi.org",
+    "accounts.google.com",
+    "accounts.youtube.com",
+    "ssl.gstatic.com",
+    "apis.google.com",
+    "vidmoly.me",
+    "vidmoly.to",
+    "vidmoly.net",
+    "molyfile.com",
+    "closeload.com",
+    "closeload.click",
+    "streamtape.com",
+    "supervideo.tv",
+    "filemoon.sx",
+    "filemoon.to",
+    "fastream.to",
+    "streamwish.to",
+    "doodstream.com",
+    "embedrise.com",
+    "luluvdo.com",
+    "vidguard.to",
+    "streamhide.to",
+    "vupload.com"
+  ],
+  "blockHosts": [
+    "bet365.com",
+    "1xbet.com",
+    "adsterra.com",
+    "popads.net"
+  ],
+  "extraCssHideSelectors": "",
+  "userAgentMode": "mobile",
+  "desktopMode": false
+}

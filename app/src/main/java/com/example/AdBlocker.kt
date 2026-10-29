@@ -415,35 +415,77 @@ class AdBlocker(private val context: Context) {
                 return@withContext Result.failure(Exception("HTTP Error: ${connection.responseCode}"))
             }
 
-            val newDomains = mutableSetOf<String>()
-            val file = File(context.filesDir, USER_BLOCKLIST_FILE)
+            val targetFile = File(context.filesDir, USER_BLOCKLIST_FILE)
+            val tempFile = File(context.filesDir, "$USER_BLOCKLIST_FILE.tmp")
 
+            // Keep existing custom rules and default asset rules
+            val existingRules = mutableSetOf<String>()
+            try {
+                context.assets.open("blocklist_hosts.txt").bufferedReader().useLines { lines ->
+                    for (l in lines) {
+                        val c = cleanDomainLine(l)
+                        if (c.isNotEmpty() && c.contains('.')) existingRules.add(c)
+                    }
+                }
+            } catch (_: Exception) {}
+
+            if (targetFile.exists()) {
+                try {
+                    targetFile.bufferedReader().useLines { lines ->
+                        for (l in lines) {
+                            val c = cleanDomainLine(l)
+                            if (c.isNotEmpty() && c.contains('.')) existingRules.add(c)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+
+            val downloadedDomains = mutableSetOf<String>()
             BufferedReader(InputStreamReader(connection.inputStream)).use { reader ->
-                file.bufferedWriter().use { writer ->
+                tempFile.bufferedWriter().use { writer ->
                     var line = reader.readLine()
                     while (line != null) {
                         val clean = cleanDomainLine(line)
                         if (clean.isNotEmpty() && clean.contains('.')) {
-                            newDomains.add(clean)
+                            downloadedDomains.add(clean)
                             writer.write(clean)
                             writer.newLine()
                         }
                         line = reader.readLine()
                     }
+                    // Append merged existing custom rules not present in downloaded list
+                    for (custom in existingRules) {
+                        if (!downloadedDomains.contains(custom)) {
+                            downloadedDomains.add(custom)
+                            writer.write(custom)
+                            writer.newLine()
+                        }
+                    }
                 }
             }
 
-            if (newDomains.isNotEmpty()) {
+            if (downloadedDomains.isNotEmpty()) {
+                // Atomic replace
+                if (targetFile.exists()) {
+                    targetFile.delete()
+                }
+                val renamed = tempFile.renameTo(targetFile)
+                if (!renamed) {
+                    tempFile.copyTo(targetFile, overwrite = true)
+                    tempFile.delete()
+                }
+
                 blocklist.clear()
-                blocklist.addAll(newDomains)
+                blocklist.addAll(downloadedDomains)
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                     .edit()
                     .putLong(PREF_LAST_UPDATE, System.currentTimeMillis())
                     .apply()
 
-                Log.d(TAG, "Blocklist successfully updated with ${newDomains.size} rules.")
-                return@withContext Result.success(newDomains.size)
+                Log.d(TAG, "Blocklist successfully updated with ${downloadedDomains.size} rules.")
+                return@withContext Result.success(downloadedDomains.size)
             } else {
+                tempFile.delete()
                 return@withContext Result.failure(Exception("Downloaded list was empty"))
             }
         } catch (e: Exception) {

@@ -105,11 +105,24 @@
                         android:textStyle="bold" />
                 </LinearLayout>
 
+                <!-- TV Remote Virtual Mouse Pointer Toggle -->
+                <ImageButton
+                    android:id="@+id/btnPointerToggle"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:background="@drawable/bg_tv_button_selector"
+                    android:src="@drawable/ic_mouse_pointer"
+                    android:focusable="true"
+                    android:clickable="true"
+                    android:contentDescription="Kumanda Fare Modu" />
+
                 <!-- Chromecast Button -->
                 <androidx.mediarouter.app.MediaRouteButton
                     android:id="@+id/mediaRouteButton"
                     android:layout_width="44dp"
                     android:layout_height="44dp"
+                    android:focusable="true"
+                    android:background="@drawable/bg_tv_button_selector"
                     android:layout_marginEnd="2dp" />
 
                 <!-- Refresh Button -->
@@ -117,7 +130,9 @@
                     android:id="@+id/btnRefresh"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
-                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:focusable="true"
+                    android:clickable="true"
+                    android:background="@drawable/bg_tv_button_selector"
                     android:src="@drawable/ic_refresh"
                     android:contentDescription="Yenile" />
 
@@ -126,7 +141,9 @@
                     android:id="@+id/btnSettings"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
-                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:focusable="true"
+                    android:clickable="true"
+                    android:background="@drawable/bg_tv_button_selector"
                     android:src="@drawable/ic_settings"
                     android:contentDescription="Ayarlar" />
             </LinearLayout>
@@ -308,7 +325,9 @@
                 android:layout_width="48dp"
                 android:layout_height="48dp"
                 android:layout_alignParentStart="true"
-                android:background="?attr/selectableItemBackgroundBorderless"
+                android:focusable="true"
+                android:clickable="true"
+                android:background="@drawable/bg_tv_button_selector"
                 android:src="@drawable/ic_fullscreen_exit"
                 android:contentDescription="Tam Ekrandan Çık" />
 
@@ -318,11 +337,59 @@
                 android:layout_width="48dp"
                 android:layout_height="48dp"
                 android:layout_alignParentEnd="true"
-                android:background="?attr/selectableItemBackgroundBorderless"
+                android:focusable="true"
+                android:clickable="true"
+                android:background="@drawable/bg_tv_button_selector"
                 android:src="@drawable/ic_pip"
                 android:contentDescription="PiP Modu" />
         </RelativeLayout>
     </FrameLayout>
+
+    <!-- TV Remote Virtual Mouse Pointer Cursor -->
+    <ImageView
+        android:id="@+id/virtualCursor"
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:src="@drawable/ic_mouse_pointer"
+        android:visibility="gone"
+        android:elevation="25dp"
+        android:importantForAccessibility="no" />
+
+    <!-- TV Mode Notification Toast/Notice -->
+    <TextView
+        android:id="@+id/txtTvModeNotice"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="56dp"
+        android:background="@drawable/bg_round_chip"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:text="Kumanda Fare Modu: Yön Tuşları (Hareket) • OK (Tıkla) • Mavi Tuş / Menü (Kapat)"
+        android:textColor="#38BDF8"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:elevation="20dp"
+        android:visibility="gone" />
+
+    <!-- Floating Landscape Menu Toggle Button (Visible in landscape when top bar is collapsed) -->
+    <ImageButton
+        android:id="@+id/btnLandscapeToggle"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="12dp"
+        android:background="@drawable/bg_floating_toggle"
+        android:src="@drawable/ic_settings"
+        app:tint="#06B6D4"
+        android:focusable="true"
+        android:clickable="true"
+        android:elevation="15dp"
+        android:contentDescription="Menü Çubuğunu Göster/Gizle"
+        android:visibility="gone" />
 
     <!-- Jetpack Compose Settings Overlay -->
     <androidx.compose.ui.platform.ComposeView

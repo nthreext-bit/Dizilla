@@ -4,26 +4,27 @@
     if (window.__dizilla_adblock_injected) return;
     window.__dizilla_adblock_injected = true;
 
-    // 1. Override window.open to prevent popup windows
+    // 1. Override window.open to block pop-ups
     try {
         window.open = function() {
-            console.log('[AdBlock] window.open intercepted and blocked');
+            console.log('[AdBlock] window.open popup intercepted and blocked');
             return null;
         };
     } catch(e) {}
 
-    // 2. Inject CSS rules to hide ad elements
+    // 2. Targeted CSS rules without greedy substring matches
     const adStyles = `
-        iframe[src*="ads"], iframe[src*="doubleclick"], iframe[src*="adsterra"],
+        iframe[src*="doubleclick"], iframe[src*="adsterra"],
         iframe[src*="popads"], iframe[src*="propeller"], iframe[src*="exoclick"],
-        [id*="banner"], [id*="reklam"], [class*="adsbox"], [class*="reklam"],
-        [class*="ad-banner"], [id*="ad-container"], [class*="banner-ads"],
-        [class*="ad_box"], [id*="overlay-ad"], [class*="pop-overlay"],
-        [class*="video-ads"], [id*="video-ad"], .preroll-ad, .ad-countdown,
+        iframe[src*="/ads/"], iframe[src*="adservice"],
+        [id^="ad-"], [id^="ad_"], [id$="-ad"], [id$="_ad"],
+        [class^="ad-"], [class^="ad_"], [class$="-ad"], [class$="_ad"],
+        [class~="ad"], [class*="adsbox"], [class*="reklam"], [id*="reklam"],
+        [id*="banner-ad"], [class*="banner-ad"],
+        [class*="pop-overlay"], .preroll-ad, .ad-countdown,
         a[href*="bet365"], a[href*="1xbet"], a[href*="bets10"], a[href*="casinomaxi"],
         a[href*="melbet"], a[href*="mostbet"],
         .ad-slot, .ad-wrapper, .ad-placeholder, #adblock-notice,
-        div[id^="ad_"], div[class^="ad_"], div[id*="_ad_"], div[class*="_ad_"],
         div[class*="sponsor"] {
             display: none !important;
             visibility: hidden !important;
@@ -31,6 +32,13 @@
             width: 0 !important;
             opacity: 0 !important;
             pointer-events: none !important;
+        }
+
+        @media (orientation: landscape) {
+            html, body {
+                width: 100% !important;
+                max-width: 100% !important;
+            }
         }
     `;
 
@@ -47,17 +55,18 @@
     if (document.head) injectCSS();
     else document.addEventListener('DOMContentLoaded', injectCSS);
 
-    // 3. Click-hijack & Transparent Overlay Remover
+    // 3. Lightweight Click-hijack & Transparent Overlay Remover
     function removeClickHijackers() {
         try {
-            const allDivs = document.querySelectorAll('div, a, span');
+            // Only inspect top-level body elements and overlay candidates, never all elements
+            const candidates = document.querySelectorAll('body > div, body > a, .pop-overlay, [class*="overlay"], [id*="overlay"]');
             const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
             const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
 
-            for (let i = 0; i < allDivs.length; i++) {
-                const el = allDivs[i];
+            for (let i = 0; i < candidates.length; i++) {
+                const el = candidates[i];
                 if (el.tagName === 'VIDEO' || el.querySelector('video') || el.querySelector('iframe')) continue;
-                if (el.classList.contains('jw-wrapper') || el.classList.contains('vjs-tech')) continue;
+                if (el.classList && (el.classList.contains('jw-wrapper') || el.classList.contains('vjs-tech') || el.classList.contains('player'))) continue;
 
                 const style = window.getComputedStyle(el);
                 if (style.position === 'fixed' || style.position === 'absolute') {
@@ -80,14 +89,15 @@
         } catch(e) {}
     }
 
-    // 4. Video Pre-roll Ad Cleanup
+    // 4. Video Pre-roll Ad Cleanup (without removing player skip buttons)
     function cleanVideoAdOverlays() {
         try {
             const videos = document.querySelectorAll('video');
             videos.forEach(v => {
                 const parent = v.parentElement;
                 if (parent) {
-                    const overlays = parent.querySelectorAll('[id*="ad"], [class*="ad"], [class*="skip"], [id*="skip"], [class*="countdown"]');
+                    // Safe selectors that never delete "skip intro" or player skip buttons
+                    const overlays = parent.querySelectorAll('[id^="ad-"], [class^="ad-"], [id^="ad_"], [class^="ad_"], [class*="preroll"], .video-ad');
                     overlays.forEach(overlay => {
                         if (overlay !== v && !overlay.contains(v)) {
                             console.log('[AdBlock] Removed video pre-roll ad overlay:', overlay);
@@ -99,17 +109,9 @@
         } catch(e) {}
     }
 
-    function runFullCleanup() {
-        injectCSS();
-        removeClickHijackers();
-        cleanVideoAdOverlays();
-        detectVideoElements();
-    }
-
     // 5. Video Detection including iframes (same-origin check)
     function detectVideoElements() {
         try {
-            // Check top level videos
             const videos = document.querySelectorAll('video');
             videos.forEach(v => {
                 if (v.src && v.src.startsWith('http')) {
@@ -121,7 +123,6 @@
                 }
             });
 
-            // Check iframes
             const iframes = document.querySelectorAll('iframe');
             iframes.forEach(iframe => {
                 try {
@@ -135,13 +136,20 @@
                         });
                     }
                 } catch(crossOriginErr) {
-                    // Cross-origin iframe handled via WebView shouldInterceptRequest
+                    // Cross-origin handled natively in WebView
                 }
             });
         } catch(e) {}
     }
 
     function notifyVideoFound(url) {
+        if (!url || typeof url !== 'string') return;
+        // Skip obvious tracking and ad videos
+        const lower = url.toLowerCase();
+        if (lower.includes('doubleclick') || lower.includes('googleads') || lower.includes('popads') ||
+            lower.includes('vignette') || lower.includes('adsystem') || lower.includes('adnxs')) {
+            return;
+        }
         if (window.DizillaNative && window.DizillaNative.onVideoDetected) {
             window.DizillaNative.onVideoDetected(url);
         }
@@ -164,20 +172,31 @@
                     videos: Array.from(new Set([...videos, ...sources]))
                 };
 
-                console.log('[PlayerInfo] Discovered player elements:', data);
                 if (window.DizillaNative && window.DizillaNative.onPlayerInfoDiscovered) {
                     window.DizillaNative.onPlayerInfoDiscovered(JSON.stringify(data));
                 }
             } catch(e) {
                 console.error('[PlayerInfo] Error collecting player info', e);
             }
-        }, 5000);
+        }, 4000);
+    }
+
+    // Debounced runner to prevent DOM stutter
+    let cleanupDebounceTimer = null;
+    function runFullCleanupDebounced() {
+        if (cleanupDebounceTimer) clearTimeout(cleanupDebounceTimer);
+        cleanupDebounceTimer = setTimeout(() => {
+            injectCSS();
+            removeClickHijackers();
+            cleanVideoAdOverlays();
+            detectVideoElements();
+        }, 350);
     }
 
     // 7. SPA Navigation Interceptor (Next.js history.pushState & replaceState & popstate)
     function onSPANavigation(route) {
         console.log('[AdBlock] SPA route changed to:', route || window.location.pathname);
-        runFullCleanup();
+        runFullCleanupDebounced();
         schedulePlayerInfoDiscovery();
     }
 
@@ -203,16 +222,16 @@
         console.warn('[AdBlock] Failed to wrap history state', e);
     }
 
-    // 8. Permanent MutationObserver for dynamically added videos/iframes/ads
+    // 8. MutationObserver with debouncing
     const observer = new MutationObserver(() => {
-        runFullCleanup();
+        runFullCleanupDebounced();
     });
 
     function startObserver() {
         const target = document.body || document.documentElement;
         if (target) {
             observer.observe(target, { childList: true, subtree: true });
-            runFullCleanup();
+            runFullCleanupDebounced();
             schedulePlayerInfoDiscovery();
         }
     }

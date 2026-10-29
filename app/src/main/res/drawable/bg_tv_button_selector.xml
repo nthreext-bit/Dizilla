@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Focused state for TV box remote -->
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="8dp" />
+            <solid android:color="#2606B6D4" />
+            <stroke android:width="2dp" android:color="#06B6D4" />
+        </shape>
+    </item>
+    <!-- Pressed state -->
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="8dp" />
+            <solid android:color="#4D06B6D4" />
+        </shape>
+    </item>
+    <!-- Default state -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
+</selector>

@@ -111,16 +111,21 @@ class ProfileManager(private val context: Context) {
             }
         }
 
-        // 2. Try default asset profile if matching brand
+        // 2. Try asset profile for this brand or default
         try {
-            val defaultStr = context.assets.open("profiles/default.json").bufferedReader().use { it.readText() }
-            val defaultJson = JSONObject(defaultStr)
-            val defaultProfile = SiteProfile.fromJson(defaultJson)
-            if (defaultProfile.brandTag.equals(brand, ignoreCase = true)) {
-                return defaultProfile
+            val assetFileName = "profiles/$brand.json"
+            val assetStr = try {
+                context.assets.open(assetFileName).bufferedReader().use { it.readText() }
+            } catch (_: Exception) {
+                context.assets.open("profiles/default.json").bufferedReader().use { it.readText() }
+            }
+            val assetJson = JSONObject(assetStr)
+            val assetProfile = SiteProfile.fromJson(assetJson)
+            if (assetProfile.brandTag.equals(brand, ignoreCase = true)) {
+                return assetProfile
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to load default asset profile", e)
+            Log.e(TAG, "Failed to load asset profile for $brand", e)
         }
 
         // 3. Fallback generic profile for unknown sites

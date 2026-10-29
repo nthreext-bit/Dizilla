@@ -1,0 +1,2673 @@
+From c8dca63e6b849e75572a481202b0e68a44892063 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 23:11:03 +0300
+Subject: [PATCH] Fix build/permissions, add Android TV remote support, harden
+ ad blocker
+
+- Manifest: fix permission names (android.permission.*), add LEANBACK_LAUNCHER,
+  touchscreen/leanback uses-feature (not required), TV banner
+- Build: optional debug/release signing, add Gradle wrapper, drop unused
+  Firebase/Room/Retrofit/Moshi/OkHttp/KSP deps, minSdk 26, targetSdk 34,
+  applicationId com.example.dizillaapp
+- TV: virtual D-pad cursor, media keys, fullscreen seek/volume, TV mode and
+  desktop/mobile UA settings (UA built from real WebView version), WebView
+  version check, double-back to exit
+- Ad blocker JS: debounce, narrower selectors, shallow overlay scan,
+  iframe-aware media control bridge
+- Cast: no repeated auto-cast, ignore blocked hosts, hide when unavailable
+- Navigation: check blocklist before Google allowance
+- Blocklist update: merge instead of overwrite, atomic write
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0152JeVckTg5VmUjBiW6CNAd
+---
+ README.md                                     |  46 ++
+ app/build.gradle.kts                          | 107 ++---
+ app/src/main/AndroidManifest.xml              |  23 +-
+ app/src/main/assets/cosmetic_adblock.js       | 152 +++++--
+ app/src/main/java/com/example/AdBlocker.kt    |  55 ++-
+ app/src/main/java/com/example/CursorView.kt   | 112 +++++
+ app/src/main/java/com/example/MainActivity.kt | 400 ++++++++++++++++--
+ .../main/java/com/example/SettingsScreen.kt   |  83 ++++
+ .../java/com/example/SiteAddressManager.kt    |  28 ++
+ app/src/main/res/drawable/tv_banner.xml       |  14 +
+ app/src/main/res/layout/activity_main.xml     |   7 +
+ build.gradle.kts                              |   3 -
+ gradle.properties                             |   2 -
+ gradle/wrapper/gradle-wrapper.jar             | Bin 0 -> 43764 bytes
+ gradlew                                       | 251 +++++++++++
+ gradlew.bat                                   |  94 ++++
+ 16 files changed, 1191 insertions(+), 186 deletions(-)
+ create mode 100644 README.md
+ create mode 100644 app/src/main/java/com/example/CursorView.kt
+ create mode 100644 app/src/main/res/drawable/tv_banner.xml
+ create mode 100644 gradle/wrapper/gradle-wrapper.jar
+ create mode 100755 gradlew
+ create mode 100644 gradlew.bat
+
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..ab18e2c
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,46 @@
++# Dizilla (Android WebView sarmalayıcı)
++
++Kişisel kullanım için, adresi ayarlardan değiştirilebilen WebView uygulaması.
++Reklam/takip engelleyici, tam ekran video, PiP (telefon) ve Chromecast (telefon) içerir.
++Android TV / TV box (ör. Raspberry Pi 5 + LineageOS Android TV) için kumanda desteği vardır.
++
++## Derleme
++
++1. Android Studio'nun güncel sürümünü açın (AGP 9.1.1 / Gradle 9.3.1 gerekir) ve projeyi açın.
++2. `Build > Build APK(s)` veya komut satırında: `./gradlew assembleDebug`
++3. Çıktı: `app/build/outputs/apk/debug/app-debug.apk`
++
++Özel `debug.keystore` yoksa Android'in varsayılan debug anahtarıyla imzalanır.
++Release için `KEYSTORE_PATH`, `STORE_PASSWORD`, `KEY_PASSWORD` ortam değişkenlerini ve
++anahtar takma adı `upload` olan bir keystore kullanın; yoksa imzasız release üretilir.
++
++## Raspberry Pi / Android TV'ye kurulum
++
++- Pi'de geliştirici seçeneklerini ve ADB'yi açın, ardından: `adb connect <pi-ip>:5555` ve `adb install -r app-debug.apk`
++- USB bellekle de kurulabilir (Bilinmeyen kaynaklar izni açık olmalı).
++
++## Kumanda (TV modu)
++
++TV modu otomatik algılanır (Ayarlar'dan Açık/Kapalı yapılabilir). TV modunda:
++
++| Tuş | İşlev |
++|---|---|
++| Yön tuşları | Sanal imleci hareket ettirir (basılı tutunca hızlanır, kenarda sayfa kayar) |
++| OK / Enter | Tıklama (basılı tutma = uzun dokunma) |
++| Menü / Info | İmleç modu ↔ odak modu |
++| Geri | Tam ekran videodan çık → sayfada geri → "Çıkmak için tekrar basın" |
++| Tam ekran videoda ◀ ▶ | 10 sn geri / ileri |
++| Tam ekran videoda OK | Oynat / duraklat |
++| Tam ekran videoda ▲ ▼ | Ses |
++| Medya tuşları | Oynat, duraklat, ileri/geri sar |
++| Kırmızı (PROG_RED) | Tam ekran aç/kapat |
++
++TV modunda Cast, PiP ve aşağı çekip yenileme kapalıdır; masaüstü görünüm kullanılır.
++
++## Hata ayıklama (Logcat)
++
++`adb logcat -s WebViewInfo NetLog PlayerInfo AdBlock DeviceMode DRM`
++
++- `WebViewInfo`: WebView paketi/sürümü ve kullanılan kullanıcı ajanı
++- `NetLog`: her ağ isteği (engellendi/geçti)
++- `PlayerInfo`: sayfadaki iframe ve video kaynakları
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 4f410f9..b719e44 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -1,11 +1,6 @@
+-import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+-
+ plugins {
+   alias(libs.plugins.android.application)
+   alias(libs.plugins.kotlin.compose)
+-  alias(libs.plugins.google.devtools.ksp)
+-  alias(libs.plugins.secrets)
+-  alias(libs.plugins.google.services)
+ }
+ 
+ android {
+@@ -13,30 +8,39 @@ android {
+   compileSdk { version = release(36) { minorApiLevel = 1 } }
+ 
+   defaultConfig {
+-    applicationId = "com.example"
+-    minSdk = 24
+-    targetSdk = 36
++    applicationId = "com.example.dizillaapp"
++    minSdk = 26
++    // 34: Android 15+ kenardan kenara (edge-to-edge) zorunluluğu targetSdk 35 ile başlar.
++    targetSdk = 34
+     versionCode = 1
+     versionName = "1.0"
+ 
+     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+   }
+ 
+-  // Do not remove or modify these signingConfigs. They are necessary for building, installing,
+-  // and updating Android apps in AI Studio.
++  // Özel imza dosyaları repoda bulunmaz (.gitignore). Dosya yoksa Android'in varsayılan
++  // debug anahtarı kullanılır; böylece "Keystore file not found" hatası oluşmaz.
++  val customDebugKeystore = file("${rootDir}/debug.keystore")
++  val customReleaseKeystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
++  val hasCustomReleaseKey = file(customReleaseKeystorePath).exists() &&
++    System.getenv("STORE_PASSWORD") != null && System.getenv("KEY_PASSWORD") != null
++
+   signingConfigs {
+-    create("release") {
+-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
+-      storeFile = file(keystorePath)
+-      storePassword = System.getenv("STORE_PASSWORD")
+-      keyAlias = "upload"
+-      keyPassword = System.getenv("KEY_PASSWORD")
++    if (hasCustomReleaseKey) {
++      create("release") {
++        storeFile = file(customReleaseKeystorePath)
++        storePassword = System.getenv("STORE_PASSWORD")
++        keyAlias = "upload"
++        keyPassword = System.getenv("KEY_PASSWORD")
++      }
+     }
+-    create("debugConfig") {
+-      storeFile = file("${rootDir}/debug.keystore")
+-      storePassword = "android"
+-      keyAlias = "androiddebugkey"
+-      keyPassword = "android"
++    if (customDebugKeystore.exists()) {
++      create("debugConfig") {
++        storeFile = customDebugKeystore
++        storePassword = "android"
++        keyAlias = "androiddebugkey"
++        keyPassword = "android"
++      }
+     }
+   }
+ 
+@@ -45,14 +49,17 @@ android {
+       isCrunchPngs = false
+       isMinifyEnabled = false
+       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
+-      // AI Studio.
+-      signingConfig = signingConfigs.getByName("release")
++      // Release anahtarı yoksa imzasız release APK üretilir (kurmak için debug APK'yı kullanın).
++      if (hasCustomReleaseKey) {
++        signingConfig = signingConfigs.getByName("release")
++      }
+     }
+     debug {
+-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
+-      // AI Studio.
+-      signingConfig = signingConfigs.getByName("debugConfig")
++      signingConfig = if (customDebugKeystore.exists()) {
++        signingConfigs.getByName("debugConfig")
++      } else {
++        signingConfigs.getByName("debug")
++      }
+     }
+   }
+   compileOptions {
+@@ -70,27 +77,11 @@ android {
+   }
+ }
+ 
+-// Configure the Secrets Gradle Plugin to use .env and .env.example files
+-// to match the convention used in Web projects.
+-secrets {
+-  propertiesFileName = ".env"
+-  defaultPropertiesFileName = ".env.example"
+-  ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
+-}
+-
+-googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
+-
+-// Some unused dependencies are commented out below instead of being removed.
+-// This makes it easy to add them back in the future if needed.
++// Kullanılmayan bağımlılıklar (Firebase, Room, Retrofit, Moshi, OkHttp, KSP, Google Services,
++// Secrets eklentisi) APK'yı şişirdiği ve Google Play Services gerektirdiği için kaldırıldı.
+ dependencies {
+   implementation(platform(libs.androidx.compose.bom))
+-  implementation(platform(libs.firebase.bom))
+-  // implementation(libs.accompanist.permissions)
+   implementation(libs.androidx.activity.compose)
+-  // implementation(libs.androidx.camera.camera2)
+-  // implementation(libs.androidx.camera.core)
+-  // implementation(libs.androidx.camera.lifecycle)
+-  // implementation(libs.androidx.camera.view)
+   implementation(libs.androidx.compose.material.icons.core)
+   implementation(libs.androidx.compose.material.icons.extended)
+   implementation(libs.androidx.compose.material3)
+@@ -101,37 +92,15 @@ dependencies {
+   implementation(libs.androidx.webkit)
+   implementation(libs.androidx.swiperefreshlayout)
+   implementation(libs.androidx.core.splashscreen)
++  // Cast isteğe bağlı: Play Services yoksa (ör. Raspberry Pi Android TV) kod bunu algılayıp kapatır.
+   implementation(libs.play.services.cast.framework)
+   implementation(libs.androidx.mediarouter)
+   implementation(libs.androidx.core.ktx)
+-  // implementation(libs.androidx.datastore.preferences)
+   implementation(libs.androidx.lifecycle.runtime.compose)
+   implementation(libs.androidx.lifecycle.runtime.ktx)
+   implementation(libs.androidx.lifecycle.viewmodel.compose)
+-  // implementation(libs.androidx.navigation.compose)
+-  implementation(libs.androidx.room.ktx)
+-  implementation(libs.androidx.room.runtime)
+-  // implementation(libs.coil.compose)
+-  implementation(libs.converter.moshi)
+-  implementation(libs.firebase.ai)
+-  // Uncomment to use Firestore:
+-  // implementation(libs.firebase.firestore)
+-
+-  // Uncomment ALL FOUR of the following dependencies together to use Firebase Auth and Google
+-  // Sign-In via Credential Manager:
+-  // implementation(libs.firebase.auth)
+-  // implementation(libs.androidx.credentials)
+-  // implementation(libs.androidx.credentials.play.services)
+-  // implementation(libs.googleid)
+-  implementation(libs.firebase.appcheck.recaptcha)
+-  implementation(libs.firebase.appcheck.debug)
+   implementation(libs.kotlinx.coroutines.android)
+   implementation(libs.kotlinx.coroutines.core)
+-  implementation(libs.logging.interceptor)
+-  implementation(libs.moshi.kotlin)
+-  implementation(libs.okhttp)
+-  // implementation(libs.play.services.location)
+-  implementation(libs.retrofit)
+   testImplementation(libs.androidx.compose.ui.test.junit4)
+   testImplementation(libs.androidx.core)
+   testImplementation(libs.androidx.junit)
+@@ -145,6 +114,4 @@ dependencies {
+   androidTestImplementation(libs.androidx.runner)
+   debugImplementation(libs.androidx.compose.ui.test.manifest)
+   debugImplementation(libs.androidx.compose.ui.tooling)
+-  "ksp"(libs.androidx.room.compiler)
+-  "ksp"(libs.moshi.kotlin.codegen)
+ }
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 4c6667a..3617e9b 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -2,12 +2,22 @@
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+     xmlns:tools="http://schemas.android.com/tools">
+ 
+-    <uses-permission android:name="android.intent.permission.INTERNET" />
+-    <uses-permission android:name="android.intent.permission.ACCESS_NETWORK_STATE" />
+-    <uses-permission android:name="android.intent.permission.ACCESS_WIFI_STATE" />
++    <!-- Doğru izin adları: android.permission.* (önceki android.intent.permission.* geçersizdi) -->
++    <uses-permission android:name="android.permission.INTERNET" />
++    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
++    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
++
++    <!-- Android TV / TV box (kumanda) desteği: dokunmatik ekran ve leanback zorunlu değil -->
++    <uses-feature
++        android:name="android.hardware.touchscreen"
++        android:required="false" />
++    <uses-feature
++        android:name="android.software.leanback"
++        android:required="false" />
+ 
+     <application
+         android:allowBackup="true"
++        android:banner="@drawable/tv_banner"
+         android:dataExtractionRules="@xml/data_extraction_rules"
+         android:fullBackupContent="@xml/backup_rules"
+         android:icon="@mipmap/ic_launcher"
+@@ -24,7 +34,7 @@
+         <activity
+             android:name=".MainActivity"
+             android:exported="true"
+-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
++            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|uiMode"
+             android:supportsPictureInPicture="true"
+             android:windowSoftInputMode="adjustResize"
+             android:label="@string/app_name"
+@@ -33,6 +43,11 @@
+                 <action android:name="android.intent.action.MAIN" />
+                 <category android:name="android.intent.category.LAUNCHER" />
+             </intent-filter>
++            <!-- Android TV ana ekranında görünmesi için -->
++            <intent-filter>
++                <action android:name="android.intent.action.MAIN" />
++                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
++            </intent-filter>
+         </activity>
+     </application>
+ 
+diff --git a/app/src/main/assets/cosmetic_adblock.js b/app/src/main/assets/cosmetic_adblock.js
+index 566044c..6b834fa 100644
+--- a/app/src/main/assets/cosmetic_adblock.js
++++ b/app/src/main/assets/cosmetic_adblock.js
+@@ -13,10 +13,13 @@
+     } catch(e) {}
+ 
+     // 2. Inject CSS rules to hide ad elements
++    // Not: "ads" gibi kısa alt dizgiler "uploads", "heads" gibi sözcükleri de eşleştirdiği için
++    // iframe seçicileri host/yol sınırlarına bağlandı (player iframe'i yanlışlıkla gizlenmesin).
+     const adStyles = `
+-        iframe[src*="ads"], iframe[src*="doubleclick"], iframe[src*="adsterra"],
++        iframe[src*="//ads."], iframe[src*=".ads."], iframe[src*="/ads/"], iframe[src*="/adserver"],
++        iframe[src*="doubleclick"], iframe[src*="adsterra"],
+         iframe[src*="popads"], iframe[src*="propeller"], iframe[src*="exoclick"],
+-        [id*="banner"], [id*="reklam"], [class*="adsbox"], [class*="reklam"],
++        [id*="ad-banner"], [id^="banner-ad"], [id*="reklam"], [class*="adsbox"], [class*="reklam"],
+         [class*="ad-banner"], [id*="ad-container"], [class*="banner-ads"],
+         [class*="ad_box"], [id*="overlay-ad"], [class*="pop-overlay"],
+         [class*="video-ads"], [id*="video-ad"], .preroll-ad, .ad-countdown,
+@@ -47,16 +50,35 @@
+     if (document.head) injectCSS();
+     else document.addEventListener('DOMContentLoaded', injectCSS);
+ 
++    // Reklam öğesi mi? "ad" yalnızca ayrı bir sözcük (ad, ads, advert, reklam...) olarak eşleşir;
++    // "loading", "header", "ready" gibi sözcükler ve oynatıcının skip/ileri-geri düğmeleri etkilenmez.
++    const AD_TOKEN = /(^|[\s_-])(ad|ads|advert|advertisement|reklam|preroll|adskip|skip-ad|ad-skip|ad-countdown|ad-timer)($|[\s_-])/i;
++    function isAdLike(el) {
++        const cls = (el.getAttribute && el.getAttribute('class')) || '';
++        const id = el.id || '';
++        return AD_TOKEN.test(cls) || AD_TOKEN.test(id);
++    }
++
+     // 3. Click-hijack & Transparent Overlay Remover
++    // Performans: tüm div/a/span yerine yalnızca body'nin 2 seviye altındaki öğeler taranır.
+     function removeClickHijackers() {
+         try {
+-            const allDivs = document.querySelectorAll('div, a, span');
++            if (!document.body) return;
+             const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+             const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
++            const candidates = [];
++            const top = document.body.children;
++            for (let i = 0; i < top.length; i++) {
++                candidates.push(top[i]);
++                const kids = top[i].children;
++                for (let j = 0; j < kids.length && j < 30; j++) candidates.push(kids[j]);
++            }
+ 
+-            for (let i = 0; i < allDivs.length; i++) {
+-                const el = allDivs[i];
+-                if (el.tagName === 'VIDEO' || el.querySelector('video') || el.querySelector('iframe')) continue;
++            for (let i = 0; i < candidates.length; i++) {
++                const el = candidates[i];
++                const tag = el.tagName;
++                if (tag !== 'DIV' && tag !== 'A' && tag !== 'SPAN') continue;
++                if (el.querySelector('video') || el.querySelector('iframe')) continue;
+                 if (el.classList.contains('jw-wrapper') || el.classList.contains('vjs-tech')) continue;
+ 
+                 const style = window.getComputedStyle(el);
+@@ -67,7 +89,7 @@
+                         if (rect.width >= vw * 0.7 && rect.height >= vh * 0.7) {
+                             const bg = style.backgroundColor;
+                             const isTransparent = bg === 'transparent' || bg.includes('rgba(0, 0, 0, 0)') || parseFloat(style.opacity) < 0.1;
+-                            const hasNoVisibleText = el.innerText.trim().length === 0;
++                            const hasNoVisibleText = (el.innerText || '').trim().length === 0;
+ 
+                             if (isTransparent || hasNoVisibleText) {
+                                 console.log('[AdBlock] Removed click-hijack overlay:', el);
+@@ -80,58 +102,52 @@
+         } catch(e) {}
+     }
+ 
+-    // 4. Video Pre-roll Ad Cleanup
++    // 4. Video Pre-roll Ad Cleanup (yalnızca gerçekten reklam gibi görünen kardeş öğeler)
+     function cleanVideoAdOverlays() {
+         try {
+             const videos = document.querySelectorAll('video');
+             videos.forEach(v => {
+                 const parent = v.parentElement;
+-                if (parent) {
+-                    const overlays = parent.querySelectorAll('[id*="ad"], [class*="ad"], [class*="skip"], [id*="skip"], [class*="countdown"]');
+-                    overlays.forEach(overlay => {
+-                        if (overlay !== v && !overlay.contains(v)) {
+-                            console.log('[AdBlock] Removed video pre-roll ad overlay:', overlay);
+-                            overlay.remove();
+-                        }
+-                    });
++                if (!parent) return;
++                const kids = parent.children;
++                for (let i = kids.length - 1; i >= 0; i--) {
++                    const overlay = kids[i];
++                    if (overlay === v || overlay.contains(v)) continue;
++                    if (isAdLike(overlay)) {
++                        console.log('[AdBlock] Removed video pre-roll ad overlay:', overlay);
++                        overlay.remove();
++                    }
+                 }
+             });
+         } catch(e) {}
+     }
+ 
+-    function runFullCleanup() {
+-        injectCSS();
+-        removeClickHijackers();
+-        cleanVideoAdOverlays();
+-        detectVideoElements();
++    // 5. Video Detection including iframes (same-origin check)
++    const notified = new Set();
++    function notifyVideoFound(url) {
++        if (!url || notified.has(url)) return;
++        notified.add(url);
++        if (window.DizillaNative && window.DizillaNative.onVideoDetected) {
++            window.DizillaNative.onVideoDetected(url);
++        }
+     }
+ 
+-    // 5. Video Detection including iframes (same-origin check)
+     function detectVideoElements() {
+         try {
+-            // Check top level videos
+             const videos = document.querySelectorAll('video');
+             videos.forEach(v => {
+-                if (v.src && v.src.startsWith('http')) {
+-                    notifyVideoFound(v.src);
+-                }
++                if (v.src && v.src.startsWith('http')) notifyVideoFound(v.src);
+                 const source = v.querySelector('source');
+-                if (source && source.src && source.src.startsWith('http')) {
+-                    notifyVideoFound(source.src);
+-                }
++                if (source && source.src && source.src.startsWith('http')) notifyVideoFound(source.src);
+             });
+ 
+-            // Check iframes
+             const iframes = document.querySelectorAll('iframe');
+             iframes.forEach(iframe => {
+                 try {
+                     const doc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
+                     if (doc) {
+-                        const iframeVideos = doc.querySelectorAll('video');
+-                        iframeVideos.forEach(iv => {
+-                            if (iv.src && iv.src.startsWith('http')) {
+-                                notifyVideoFound(iv.src);
+-                            }
++                        doc.querySelectorAll('video').forEach(iv => {
++                            if (iv.src && iv.src.startsWith('http')) notifyVideoFound(iv.src);
+                         });
+                     }
+                 } catch(crossOriginErr) {
+@@ -141,10 +157,21 @@
+         } catch(e) {}
+     }
+ 
+-    function notifyVideoFound(url) {
+-        if (window.DizillaNative && window.DizillaNative.onVideoDetected) {
+-            window.DizillaNative.onVideoDetected(url);
+-        }
++    function runFullCleanup() {
++        injectCSS();
++        removeClickHijackers();
++        cleanVideoAdOverlays();
++        detectVideoElements();
++    }
++
++    // Debounce: DOM değişim fırtınasında (özellikle zayıf TV/Pi cihazlarda) en fazla ~5 kez/sn çalışır
++    let cleanupTimer = null;
++    function scheduleCleanup() {
++        if (cleanupTimer) return;
++        cleanupTimer = setTimeout(function() {
++            cleanupTimer = null;
++            runFullCleanup();
++        }, 200);
+     }
+ 
+     // 6. Discovery Mode: Gather all iframes and video/source src values
+@@ -177,7 +204,7 @@
+     // 7. SPA Navigation Interceptor (Next.js history.pushState & replaceState & popstate)
+     function onSPANavigation(route) {
+         console.log('[AdBlock] SPA route changed to:', route || window.location.pathname);
+-        runFullCleanup();
++        scheduleCleanup();
+         schedulePlayerInfoDiscovery();
+     }
+ 
+@@ -203,16 +230,14 @@
+         console.warn('[AdBlock] Failed to wrap history state', e);
+     }
+ 
+-    // 8. Permanent MutationObserver for dynamically added videos/iframes/ads
+-    const observer = new MutationObserver(() => {
+-        runFullCleanup();
+-    });
++    // 8. Permanent MutationObserver for dynamically added videos/iframes/ads (debounced)
++    const observer = new MutationObserver(scheduleCleanup);
+ 
+     function startObserver() {
+         const target = document.body || document.documentElement;
+         if (target) {
+             observer.observe(target, { childList: true, subtree: true });
+-            runFullCleanup();
++            scheduleCleanup();
+             schedulePlayerInfoDiscovery();
+         }
+     }
+@@ -225,4 +250,41 @@
+ 
+     document.addEventListener('play', detectVideoElements, true);
+ 
++    // 9. Kumanda / medya tuşları için <video> kontrolü.
++    // Native taraf window.__dzMedia('play'|'pause'|'toggle'|'seek+10'|'seek-10'|'fs') çağırır.
++    // Video bu çerçevede yoksa komut alt iframe'lere postMessage ile iletilir (oynatıcılar
++    // genellikle iframe içindedir).
++    function applyMedia(cmd) {
++        try {
++            const v = document.querySelector('video');
++            if (v) {
++                switch (cmd) {
++                    case 'play': v.play(); break;
++                    case 'pause': v.pause(); break;
++                    case 'toggle': if (v.paused) v.play(); else v.pause(); break;
++                    case 'seek+10': v.currentTime = Math.min(isFinite(v.duration) ? v.duration : Infinity, v.currentTime + 10); break;
++                    case 'seek-10': v.currentTime = Math.max(0, v.currentTime - 10); break;
++                    case 'fs':
++                        if (document.fullscreenElement || document.webkitFullscreenElement) {
++                            (document.exitFullscreen || document.webkitExitFullscreen).call(document);
++                        } else {
++                            const t = v.parentElement || v;
++                            const req = t.requestFullscreen || t.webkitRequestFullscreen || v.webkitEnterFullscreen;
++                            if (req) req.call(t);
++                        }
++                        break;
++                }
++                return;
++            }
++            document.querySelectorAll('iframe').forEach(f => {
++                try { f.contentWindow.postMessage({ __dz: cmd }, '*'); } catch (e) {}
++            });
++        } catch (e) {}
++    }
++    window.__dzMedia = applyMedia;
++    window.addEventListener('message', function(e) {
++        const d = e.data;
++        if (d && typeof d === 'object' && typeof d.__dz === 'string') applyMedia(d.__dz);
++    });
++
+ })();
+diff --git a/app/src/main/java/com/example/AdBlocker.kt b/app/src/main/java/com/example/AdBlocker.kt
+index 333c99d..a412e09 100644
+--- a/app/src/main/java/com/example/AdBlocker.kt
++++ b/app/src/main/java/com/example/AdBlocker.kt
+@@ -150,7 +150,10 @@ class AdBlocker(private val context: Context) {
+     fun getEffectiveCosmeticScript(): String {
+         val extra = currentProfile?.extraCssHideSelectors
+         return if (!extra.isNullOrBlank()) {
+-            "$baseCosmeticScript\n\n(function() { try { var s = document.createElement('style'); s.innerHTML = '${extra.replace("'", "\\'")} { display: none !important; }'; document.head.appendChild(s); } catch(e){} })();"
++            // Belge başında document.head henüz yoksa DOMContentLoaded'a kadar bekler; seçici metni
++            // JSON olarak güvenle kaçışlanır (tırnak/satır sonu içerse bile bozulmaz).
++            val quoted = org.json.JSONObject.quote("$extra { display: none !important; }")
++            "$baseCosmeticScript\n\n(function() { var css = $quoted; function add() { try { var s = document.createElement('style'); s.setAttribute('data-adblock-extra', 'true'); s.textContent = css; (document.head || document.documentElement).appendChild(s); } catch(e){} } if (document.head) add(); else document.addEventListener('DOMContentLoaded', add); })();"
+         } else {
+             baseCosmeticScript
+         }
+@@ -400,34 +403,50 @@ class AdBlocker(private val context: Context) {
+                 return@withContext Result.failure(Exception("HTTP Error: ${connection.responseCode}"))
+             }
+ 
+-            val newDomains = mutableSetOf<String>()
+-            val file = File(context.filesDir, USER_BLOCKLIST_FILE)
+-
++            // Önce belleğe indir: bağlantı yarıda kesilirse mevcut liste dosyası bozulmaz.
++            val downloaded = mutableSetOf<String>()
+             BufferedReader(InputStreamReader(connection.inputStream)).use { reader ->
+-                file.bufferedWriter().use { writer ->
+-                    var line = reader.readLine()
+-                    while (line != null) {
+-                        val clean = cleanDomainLine(line)
+-                        if (clean.isNotEmpty() && clean.contains('.')) {
+-                            newDomains.add(clean)
+-                            writer.write(clean)
+-                            writer.newLine()
+-                        }
+-                        line = reader.readLine()
++                var line = reader.readLine()
++                while (line != null) {
++                    val clean = cleanDomainLine(line)
++                    // "0.0.0.0 0.0.0.0" gibi satırlardaki IP'leri ve alan adı olmayanları atla
++                    if (clean.isNotEmpty() && clean.contains('.') && clean != "0.0.0.0" &&
++                        clean.any { it.isLetter() }) {
++                        downloaded.add(clean)
+                     }
++                    line = reader.readLine()
+                 }
+             }
+ 
+-            if (newDomains.isNotEmpty()) {
++            if (downloaded.isNotEmpty()) {
++                // Kullanıcının ve varsayılan kuralları koru: indirilen liste mevcutlara EKLENİR
++                val merged = HashSet<String>(blocklist.size + downloaded.size)
++                synchronized(blocklist) { merged.addAll(blocklist) }
++                merged.addAll(downloaded)
++
++                // Geçici dosyaya yaz, başarılıysa asıl dosyayla değiştir (atomik)
++                val file = File(context.filesDir, USER_BLOCKLIST_FILE)
++                val tmp = File(context.filesDir, "$USER_BLOCKLIST_FILE.tmp")
++                tmp.bufferedWriter().use { writer ->
++                    for (d in merged) {
++                        writer.write(d)
++                        writer.newLine()
++                    }
++                }
++                if (!tmp.renameTo(file)) {
++                    file.writeText(tmp.readText())
++                    tmp.delete()
++                }
++
+                 blocklist.clear()
+-                blocklist.addAll(newDomains)
++                blocklist.addAll(merged)
+                 context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                     .edit()
+                     .putLong(PREF_LAST_UPDATE, System.currentTimeMillis())
+                     .apply()
+ 
+-                Log.d(TAG, "Blocklist successfully updated with ${newDomains.size} rules.")
+-                return@withContext Result.success(newDomains.size)
++                Log.d(TAG, "Blocklist updated: ${downloaded.size} downloaded, ${merged.size} total rules.")
++                return@withContext Result.success(merged.size)
+             } else {
+                 return@withContext Result.failure(Exception("Downloaded list was empty"))
+             }
+diff --git a/app/src/main/java/com/example/CursorView.kt b/app/src/main/java/com/example/CursorView.kt
+new file mode 100644
+index 0000000..ba026af
+--- /dev/null
++++ b/app/src/main/java/com/example/CursorView.kt
+@@ -0,0 +1,112 @@
++package com.example
++
++import android.content.Context
++import android.graphics.Canvas
++import android.graphics.Paint
++import android.graphics.Path
++import android.os.Handler
++import android.os.Looper
++import android.util.AttributeSet
++import android.view.View
++
++/**
++ * Kumanda (D-pad) için WebView üstünde gezdirilen sanal fare imleci.
++ * Dokunma olaylarını almaz; yalnızca çizim yapar. Konum MainActivity tarafından yönetilir.
++ */
++class CursorView @JvmOverloads constructor(
++    context: Context,
++    attrs: AttributeSet? = null
++) : View(context, attrs) {
++
++    var cursorX = 0f
++        private set
++    var cursorY = 0f
++        private set
++
++    private val density = resources.displayMetrics.density
++    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
++        color = 0xFFFFFFFF.toInt()
++        style = Paint.Style.FILL
++    }
++    private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
++        color = 0xFF06B6D4.toInt()
++        style = Paint.Style.STROKE
++        strokeWidth = 2f * density
++    }
++    private val arrow = Path()
++    private val handler = Handler(Looper.getMainLooper())
++    private val fadeRunnable = Runnable { animate().alpha(0.25f).setDuration(400).start() }
++    private val hideRunnable = Runnable { animate().alpha(0f).setDuration(600).start() }
++
++    init {
++        isClickable = false
++        isFocusable = false
++        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
++        alpha = 0f
++    }
++
++    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
++        super.onSizeChanged(w, h, oldw, oldh)
++        if (cursorX == 0f && cursorY == 0f) {
++            cursorX = w / 2f
++            cursorY = h / 2f
++        } else {
++            cursorX = cursorX.coerceIn(0f, w.toFloat() - 1f)
++            cursorY = cursorY.coerceIn(0f, h.toFloat() - 1f)
++        }
++    }
++
++    /** İmleci hareket ettirir; ekran kenarına taşan miktarı (overflowX, overflowY) döndürür. */
++    fun moveBy(dx: Float, dy: Float): Pair<Float, Float> {
++        val maxX = (width - 1).coerceAtLeast(0).toFloat()
++        val maxY = (height - 1).coerceAtLeast(0).toFloat()
++        val newX = cursorX + dx
++        val newY = cursorY + dy
++        cursorX = newX.coerceIn(0f, maxX)
++        cursorY = newY.coerceIn(0f, maxY)
++        val overflowX = newX - cursorX
++        val overflowY = newY - cursorY
++        wake()
++        invalidate()
++        return Pair(overflowX, overflowY)
++    }
++
++    /** İmleci görünür yapar; 3 sn hareketsiz kalınca soluklaşır, sonra gizlenir. */
++    fun wake() {
++        handler.removeCallbacks(fadeRunnable)
++        handler.removeCallbacks(hideRunnable)
++        animate().cancel()
++        alpha = 1f
++        handler.postDelayed(fadeRunnable, 3000)
++        handler.postDelayed(hideRunnable, 8000)
++    }
++
++    fun hideNow() {
++        handler.removeCallbacks(fadeRunnable)
++        handler.removeCallbacks(hideRunnable)
++        animate().cancel()
++        alpha = 0f
++    }
++
++    override fun onDraw(canvas: Canvas) {
++        super.onDraw(canvas)
++        val s = density
++        arrow.reset()
++        arrow.moveTo(cursorX, cursorY)
++        arrow.lineTo(cursorX, cursorY + 20f * s)
++        arrow.lineTo(cursorX + 5f * s, cursorY + 15f * s)
++        arrow.lineTo(cursorX + 9f * s, cursorY + 23f * s)
++        arrow.lineTo(cursorX + 12f * s, cursorY + 21.5f * s)
++        arrow.lineTo(cursorX + 8f * s, cursorY + 14f * s)
++        arrow.lineTo(cursorX + 15f * s, cursorY + 14f * s)
++        arrow.close()
++        canvas.drawPath(arrow, fillPaint)
++        canvas.drawPath(arrow, strokePaint)
++    }
++
++    override fun onDetachedFromWindow() {
++        handler.removeCallbacks(fadeRunnable)
++        handler.removeCallbacks(hideRunnable)
++        super.onDetachedFromWindow()
++    }
++}
+diff --git a/app/src/main/java/com/example/MainActivity.kt b/app/src/main/java/com/example/MainActivity.kt
+index 7118f5d..9a21a30 100644
+--- a/app/src/main/java/com/example/MainActivity.kt
++++ b/app/src/main/java/com/example/MainActivity.kt
+@@ -45,8 +45,15 @@ import androidx.core.view.WindowInsetsControllerCompat
+ import androidx.lifecycle.lifecycleScope
+ import androidx.mediarouter.app.MediaRouteButton
+ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
++import androidx.webkit.ScriptHandler
+ import androidx.webkit.WebViewCompat
+ import androidx.webkit.WebViewFeature
++import android.app.UiModeManager
++import android.content.pm.PackageManager
++import android.media.AudioManager
++import android.os.SystemClock
++import android.view.KeyEvent
++import android.view.MotionEvent
+ import com.google.android.gms.cast.MediaInfo
+ import com.google.android.gms.cast.MediaLoadOptions
+ import com.google.android.gms.cast.MediaMetadata
+@@ -61,10 +68,20 @@ class MainActivity : AppCompatActivity() {
+ 
+     companion object {
+         private const val TAG = "DizillaApp"
+-        private const val MOBILE_USER_AGENT =
+-            "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36"
++        private const val MIN_WEBVIEW_MAJOR = 100
++        private const val FALLBACK_CHROME_VERSION = "124.0.0.0"
+     }
+ 
++    // TV / kumanda
++    private var tvMode = false
++    private var cursorMode = false
++    private var webViewMajor = 0
++    private var chromeVersion = FALLBACK_CHROME_VERSION
++    private var docStartHandler: ScriptHandler? = null
++    private var lastBackPressAt = 0L
++    private var centerDownAt = 0L
++    private lateinit var cursorView: CursorView
++
+     private lateinit var addressManager: SiteAddressManager
+     private lateinit var profileManager: ProfileManager
+     private lateinit var adBlocker: AdBlocker
+@@ -136,30 +153,303 @@ class MainActivity : AppCompatActivity() {
+         installSplashScreen()
+ 
+         super.onCreate(savedInstanceState)
+-        setContentView(R.layout.activity_main)
+ 
+         addressManager = SiteAddressManager(this)
++        tvMode = detectTv()
++        Log.i("DeviceMode", "tvMode=$tvMode (setting=${addressManager.tvMode})")
++
++        // WebView yüklenemezse (eksik/bozuk WebView paketi) çökmek yerine açıklayıcı ekran göster
++        try {
++            setContentView(R.layout.activity_main)
++        } catch (t: Throwable) {
++            Log.e(TAG, "WebView/layout could not be created", t)
++            showFatalWebViewError(t)
++            return
++        }
++
+         profileManager = ProfileManager(this)
++        readWebViewInfo()
+ 
+         adBlocker = AdBlocker(this)
+         adBlocker.siteAddressManager = addressManager
+ 
+         initViews()
++        applyTvUi()
+         setupCast()
++
++        // Profil, WebView ayarlarından ve belge-başı script kaydından ÖNCE yüklenmeli
++        val activeUrl = addressManager.currentUrl
++        if (!activeUrl.isNullOrBlank()) {
++            updateActiveProfile(activeUrl, reloadScript = false)
++        }
+         setupWebView()
+         setupSwipeRefresh()
+         setupBackNavigation()
+ 
+         // Address Management: Load active URL or show setup screen if empty
+-        val activeUrl = addressManager.currentUrl
+         if (activeUrl.isNullOrBlank()) {
+             showSetupUrlScreen()
+         } else {
+-            updateActiveProfile(activeUrl)
+             webView.loadUrl(activeUrl)
+         }
+     }
+ 
++    private fun detectTv(): Boolean = when (addressManager.tvMode) {
++        TvMode.ON -> true
++        TvMode.OFF -> false
++        TvMode.AUTO -> {
++            val ui = getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
++            ui?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION ||
++                packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
++                !packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)
++        }
++    }
++
++    private fun showFatalWebViewError(t: Throwable) {
++        val tv = TextView(this).apply {
++            setBackgroundColor(0xFF111827.toInt())
++            setTextColor(0xFFF3F4F6.toInt())
++            textSize = 16f
++            setPadding(48, 48, 48, 48)
++            text = "WebView başlatılamadı.\n\n" +
++                "Sistemde 'Android System WebView' veya Chromium WebView paketi eksik ya da bozuk olabilir. " +
++                "Ayarlar > Uygulamalar bölümünden WebView'ı güncelleyin/etkinleştirin ve uygulamayı yeniden açın.\n\n" +
++                "Teknik ayrıntı: ${t.javaClass.simpleName}: ${t.message}"
++        }
++        setContentView(tv)
++    }
++
++    /** WebView paket/sürüm bilgisini okur, loglar (etiket: WebViewInfo) ve eskiyse uyarır. */
++    private fun readWebViewInfo() {
++        try {
++            val pkg = WebViewCompat.getCurrentWebViewPackage(this)
++            val version = pkg?.versionName ?: ""
++            Log.i("WebViewInfo", "package=${pkg?.packageName} version=$version sdk=${Build.VERSION.SDK_INT}")
++            webViewMajor = Regex("""^(\d+)""").find(version)?.groupValues?.get(1)?.toIntOrNull() ?: 0
++        } catch (t: Throwable) {
++            Log.w("WebViewInfo", "WebView package info unavailable: ${t.message}")
++        }
++        try {
++            val defaultUa = WebSettings.getDefaultUserAgent(this)
++            Regex("""Chrome/(\d+(?:\.\d+)*)""").find(defaultUa)?.groupValues?.get(1)?.let {
++                chromeVersion = it
++                if (webViewMajor == 0) {
++                    webViewMajor = it.substringBefore('.').toIntOrNull() ?: 0
++                }
++            }
++            Log.i("WebViewInfo", "defaultUA=$defaultUa")
++        } catch (t: Throwable) {
++            Log.w("WebViewInfo", "Default UA unavailable: ${t.message}")
++        }
++        if (webViewMajor in 1 until MIN_WEBVIEW_MAJOR) {
++            Toast.makeText(
++                this,
++                "WebView eski (Chromium $webViewMajor). Site düzgün çalışmayabilir; WebView'ı güncelleyin.",
++                Toast.LENGTH_LONG
++            ).show()
++        }
++    }
++
++    /** TV modunda: imleç açık, dokunmatik/telefon odaklı öğeler kapalı, yatay ekran. */
++    private fun applyTvUi() {
++        cursorView = findViewById(R.id.cursorView)
++        if (tvMode) {
++            cursorMode = true
++            cursorView.visibility = View.VISIBLE
++            cursorView.wake()
++            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
++            swipeRefreshLayout.isEnabled = false
++            mediaRouteButton.visibility = View.GONE
++            btnPipFullscreen.visibility = View.GONE
++            castStreamBanner.visibility = View.GONE
++        } else {
++            cursorView.visibility = View.GONE
++        }
++    }
++
++    /** Masaüstü mu mobil mi: ayar > site profili > cihaz türü (TV = masaüstü). */
++    private fun useDesktopUa(): Boolean = when (addressManager.uaMode) {
++        UaMode.DESKTOP -> true
++        UaMode.MOBILE -> false
++        UaMode.AUTO -> {
++            val p = adBlocker.currentProfile
++            when {
++                p?.desktopMode == true || p?.userAgentMode.equals("desktop", ignoreCase = true) -> true
++                p?.userAgentMode.equals("mobile", ignoreCase = true) && !tvMode -> false
++                else -> tvMode
++            }
++        }
++    }
++
++    /** UA'daki Chrome sürümü cihazdaki gerçek WebView sürümünden üretilir (sabit eski sürüm yok). */
++    private fun applyUserAgent() {
++        val desktop = useDesktopUa()
++        val ua = if (desktop) {
++            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$chromeVersion Safari/537.36"
++        } else {
++            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$chromeVersion Mobile Safari/537.36"
++        }
++        val s = webView.settings
++        s.userAgentString = ua
++        s.useWideViewPort = desktop
++        s.loadWithOverviewMode = desktop
++        Log.i("WebViewInfo", "UA(desktop=$desktop)=$ua")
++    }
++
++    /** Kozmetik script'i belge başında enjekte eder; profil/adres değişince yeniden kaydeder. */
++    private fun registerDocStartScript() {
++        try {
++            docStartHandler?.remove()
++        } catch (_: Throwable) {}
++        docStartHandler = null
++        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
++            try {
++                docStartHandler = WebViewCompat.addDocumentStartJavaScript(
++                    webView,
++                    adBlocker.getEffectiveCosmeticScript(),
++                    setOf("*")
++                )
++                Log.d(TAG, "DocumentStartJavaScript registered.")
++            } catch (e: Exception) {
++                Log.e(TAG, "Failed to register DocumentStartJavaScript", e)
++            }
++        } else {
++            Log.w(TAG, "DOCUMENT_START_SCRIPT unsupported; falling back to onPageStarted injection.")
++        }
++    }
++
++    // ---------------------------------------------------------------- Kumanda tuşları
++
++    private fun runMediaCommand(cmd: String) {
++        webView.evaluateJavascript(
++            "(function(){try{if(window.__dzMedia){window.__dzMedia('$cmd');}}catch(e){}})();",
++            null
++        )
++    }
++
++    private fun toggleCursorMode() {
++        cursorMode = !cursorMode
++        if (cursorMode) cursorView.wake() else cursorView.hideNow()
++        Toast.makeText(
++            this,
++            if (cursorMode) "İmleç modu: AÇIK" else "İmleç modu: KAPALI (odak/yön tuşları)",
++            Toast.LENGTH_SHORT
++        ).show()
++    }
++
++    private fun sendTouch(action: Int, x: Float, y: Float, downTime: Long) {
++        val loc = IntArray(2)
++        val wLoc = IntArray(2)
++        cursorView.getLocationOnScreen(loc)
++        webView.getLocationOnScreen(wLoc)
++        val lx = x + (loc[0] - wLoc[0])
++        val ly = y + (loc[1] - wLoc[1])
++        val ev = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, lx, ly, 0)
++        ev.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
++        webView.dispatchTouchEvent(ev)
++        ev.recycle()
++    }
++
++    private fun sendHover(x: Float, y: Float) {
++        val loc = IntArray(2)
++        val wLoc = IntArray(2)
++        cursorView.getLocationOnScreen(loc)
++        webView.getLocationOnScreen(wLoc)
++        val ev = MotionEvent.obtain(
++            SystemClock.uptimeMillis(), SystemClock.uptimeMillis(), MotionEvent.ACTION_HOVER_MOVE,
++            x + (loc[0] - wLoc[0]), y + (loc[1] - wLoc[1]), 0
++        )
++        ev.source = android.view.InputDevice.SOURCE_MOUSE
++        webView.dispatchGenericMotionEvent(ev)
++        ev.recycle()
++    }
++
++    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
++        if (!tvMode || !::cursorView.isInitialized) return super.dispatchKeyEvent(event)
++
++        // Ayarlar / kurulum ekranı (Compose) açıkken tuşları Compose'a bırak
++        if (composeSettingsView.visibility == View.VISIBLE) return super.dispatchKeyEvent(event)
++
++        val code = event.keyCode
++        val down = event.action == KeyEvent.ACTION_DOWN
++
++        // Medya tuşları: her zaman <video> öğesine iletilir
++        when (code) {
++            KeyEvent.KEYCODE_MEDIA_PLAY -> { if (down) runMediaCommand("play"); return true }
++            KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_MEDIA_STOP -> { if (down) runMediaCommand("pause"); return true }
++            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_HEADSETHOOK -> { if (down) runMediaCommand("toggle"); return true }
++            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { if (down) runMediaCommand("seek+10"); return true }
++            KeyEvent.KEYCODE_MEDIA_REWIND -> { if (down) runMediaCommand("seek-10"); return true }
++            KeyEvent.KEYCODE_PROG_RED -> { if (down) runMediaCommand("fs"); return true }
++        }
++
++        // Menü / Info: imleç <-> odak modu
++        if (code == KeyEvent.KEYCODE_MENU || code == KeyEvent.KEYCODE_INFO) {
++            if (event.action == KeyEvent.ACTION_UP) toggleCursorMode()
++            return true
++        }
++
++        // Tam ekran videoda: sol/sağ = ±10 sn, merkez = oynat/duraklat, yukarı/aşağı = ses
++        if (customView != null) {
++            when (code) {
++                KeyEvent.KEYCODE_DPAD_LEFT -> { if (down) runMediaCommand("seek-10"); return true }
++                KeyEvent.KEYCODE_DPAD_RIGHT -> { if (down) runMediaCommand("seek+10"); return true }
++                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { if (down && event.repeatCount == 0) runMediaCommand("toggle"); return true }
++                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
++                    if (down) {
++                        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
++                        am.adjustStreamVolume(
++                            AudioManager.STREAM_MUSIC,
++                            if (code == KeyEvent.KEYCODE_DPAD_UP) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER,
++                            AudioManager.FLAG_SHOW_UI
++                        )
++                    }
++                    return true
++                }
++            }
++            return super.dispatchKeyEvent(event)
++        }
++
++        if (!cursorMode) return super.dispatchKeyEvent(event)
++
++        // Ekran klavyesi açıkken imleç duraklar (yön tuşları klavyeye gider)
++        if (isKeyboardOpen()) return super.dispatchKeyEvent(event)
++
++        when (code) {
++            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
++            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
++                if (!down) return true
++                // İvmelenme: ilk ~300 ms yavaş, sonra kademeli hızlanır
++                val density = resources.displayMetrics.density
++                val step = (4f + (event.repeatCount.coerceAtMost(40) * 0.9f)) * density
++                val dx = when (code) { KeyEvent.KEYCODE_DPAD_LEFT -> -step; KeyEvent.KEYCODE_DPAD_RIGHT -> step; else -> 0f }
++                val dy = when (code) { KeyEvent.KEYCODE_DPAD_UP -> -step; KeyEvent.KEYCODE_DPAD_DOWN -> step; else -> 0f }
++                val (ox, oy) = cursorView.moveBy(dx, dy)
++                // İmleç kenara dayanınca sayfa kayar
++                if (ox != 0f || oy != 0f) webView.scrollBy(ox.toInt(), oy.toInt())
++                sendHover(cursorView.cursorX, cursorView.cursorY)
++                return true
++            }
++            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
++                cursorView.wake()
++                if (down && event.repeatCount == 0) {
++                    centerDownAt = SystemClock.uptimeMillis()
++                    sendTouch(MotionEvent.ACTION_DOWN, cursorView.cursorX, cursorView.cursorY, centerDownAt)
++                } else if (event.action == KeyEvent.ACTION_UP) {
++                    // Kısa basış = tıklama, uzun basış = WebView'ın uzun dokunma algısı
++                    sendTouch(MotionEvent.ACTION_UP, cursorView.cursorX, cursorView.cursorY, centerDownAt)
++                }
++                return true
++            }
++        }
++        return super.dispatchKeyEvent(event)
++    }
++
++    private fun isKeyboardOpen(): Boolean {
++        val insets = androidx.core.view.ViewCompat.getRootWindowInsets(window.decorView)
++        return insets?.isVisible(WindowInsetsCompat.Type.ime()) == true
++    }
++
+     private fun initViews() {
+         mainContentContainer = findViewById(R.id.mainContentContainer)
+         topBar = findViewById(R.id.topBar)
+@@ -280,7 +570,7 @@ class MainActivity : AppCompatActivity() {
+         }
+     }
+ 
+-    private fun updateActiveProfile(url: String) {
++    private fun updateActiveProfile(url: String, reloadScript: Boolean = true) {
+         val host = try {
+             Uri.parse(url).host ?: ""
+         } catch (e: Exception) {
+@@ -289,6 +579,9 @@ class MainActivity : AppCompatActivity() {
+         val profile = profileManager.getProfileForHost(host)
+         adBlocker.currentProfile = profile
+         txtDomain.text = if (host.isNotBlank()) host else "Adres Tanımsız"
++        applyUserAgent()
++        // Profil (ek CSS seçicileri) değiştiği için belge-başı script'i yeniden kaydet
++        if (reloadScript) registerDocStartScript()
+     }
+ 
+     private fun clearSiteData() {
+@@ -317,6 +610,11 @@ class MainActivity : AppCompatActivity() {
+     }
+ 
+     private fun setupCast() {
++        // TV'nin kendisi ekran olduğu için Cast gereksiz; ayrıca Pi gibi cihazlarda Play Services yok
++        if (tvMode) {
++            mediaRouteButton.visibility = View.GONE
++            return
++        }
+         try {
+             castContext = CastContext.getSharedInstance(this)
+             CastButtonFactory.setUpMediaRouteButton(applicationContext, mediaRouteButton)
+@@ -342,8 +640,9 @@ class MainActivity : AppCompatActivity() {
+         }
+ 
+         // Allow pull to refresh only when webView is at the top
++        swipeRefreshLayout.isEnabled = !tvMode
+         webView.viewTreeObserver.addOnScrollChangedListener {
+-            swipeRefreshLayout.isEnabled = (webView.scrollY == 0 && customView == null && composeSettingsView.visibility != View.VISIBLE)
++            swipeRefreshLayout.isEnabled = (!tvMode && webView.scrollY == 0 && customView == null && composeSettingsView.visibility != View.VISIBLE)
+         }
+     }
+ 
+@@ -366,7 +665,14 @@ class MainActivity : AppCompatActivity() {
+                     webView.goBack()
+                 }
+                 else -> {
+-                    finish()
++                    // Son sayfada: çıkmak için 2 sn içinde tekrar basılmalı
++                    val now = SystemClock.uptimeMillis()
++                    if (now - lastBackPressAt < 2000) {
++                        finish()
++                    } else {
++                        lastBackPressAt = now
++                        Toast.makeText(this@MainActivity, "Çıkmak için tekrar basın", Toast.LENGTH_SHORT).show()
++                    }
+                 }
+             }
+         }
+@@ -383,7 +689,7 @@ class MainActivity : AppCompatActivity() {
+         settings.domStorageEnabled = true
+         settings.databaseEnabled = true
+         settings.mediaPlaybackRequiresUserGesture = false
+-        settings.userAgentString = MOBILE_USER_AGENT
++        applyUserAgent()
+         settings.setSupportMultipleWindows(true)
+         settings.cacheMode = WebSettings.LOAD_DEFAULT
+         settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+@@ -400,19 +706,8 @@ class MainActivity : AppCompatActivity() {
+             // Ignored if unsupported
+         }
+ 
+-        // Cosmetic script injection at document start if supported
+-        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+-            try {
+-                WebViewCompat.addDocumentStartJavaScript(
+-                    webView,
+-                    adBlocker.getEffectiveCosmeticScript(),
+-                    setOf("*")
+-                )
+-                Log.d(TAG, "DocumentStartJavaScript injected successfully.")
+-            } catch (e: Exception) {
+-                Log.e(TAG, "Failed to register DocumentStartJavaScript", e)
+-            }
+-        }
++        // Cosmetic script injection at document start if supported (fallback: onPageStarted)
++        registerDocStartScript()
+ 
+         // Javascript Bridge for video stream & player discovery (SPA & Debug)
+         webView.addJavascriptInterface(object {
+@@ -472,10 +767,10 @@ class MainActivity : AppCompatActivity() {
+                 val uri = request?.url ?: return null
+                 val uriString = uri.toString().lowercase(Locale.ROOT)
+ 
+-                // Detect video stream URLs
+-                if (uriString.contains(".m3u8") || uriString.contains(".mp4") ||
+-                    uriString.contains("/hls/") || uriString.contains("videoplayback") ||
+-                    uriString.contains(".mp4?") || uriString.contains(".m3u8?")) {
++                // Detect video stream URLs (engellenen/reklam host'larındaki medya yok sayılır)
++                if ((uriString.contains(".m3u8") || uriString.contains(".mp4")) &&
++                    request?.isForMainFrame != true &&
++                    adBlocker.isBlocked(uri.host) == null) {
+                     runOnUiThread {
+                         onVideoStreamFound(uri.toString())
+                     }
+@@ -523,8 +818,16 @@ class MainActivity : AppCompatActivity() {
+                     return true
+                 }
+ 
++                // Engel listesi Google kontrolünden ÖNCE bakılır (adservice.google.com gibi reklam
++                // adresleri *.google.com izniyle geçmesin)
++                if (adBlocker.isBlocked(host) != null) {
++                    Log.d("AdBlock", "Blocked navigation to blocked domain: $host")
++                    return true
++                }
++
+                 // Google Sign-In Support (accounts.google.com)
+-                if (host == "accounts.google.com" || host.endsWith(".google.com") || host.endsWith(".google.com.tr") || host.endsWith(".youtube.com")) {
++                if (host == "accounts.google.com" || host.endsWith(".google.com") || host.endsWith(".google.com.tr") ||
++                    host == "accounts.youtube.com" || host.endsWith(".youtube.com")) {
+                     CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
+                     Log.d("AdBlock", "Allowing Google Sign-In navigation: $uri")
+                     return false
+@@ -532,12 +835,6 @@ class MainActivity : AppCompatActivity() {
+                     CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false)
+                 }
+ 
+-                // Block if in active profile or global blocklist
+-                if (adBlocker.isBlocked(host) != null) {
+-                    Log.d("AdBlock", "Blocked navigation to blocked domain: $host")
+-                    return true
+-                }
+-
+                 // Dynamic same-site policy or allowlist check
+                 if (addressManager.isSameSite(host) || adBlocker.isAllowed(host)) {
+                     return false
+@@ -565,12 +862,17 @@ class MainActivity : AppCompatActivity() {
+             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                 errorContainer.visibility = View.GONE
+                 webView.visibility = View.VISIBLE
+-                view?.evaluateJavascript(adBlocker.getEffectiveCosmeticScript(), null)
++                // Belge-başı script destekleniyorsa tekrar enjekte etmeye gerek yok
++                if (docStartHandler == null) {
++                    view?.evaluateJavascript(adBlocker.getEffectiveCosmeticScript(), null)
++                }
+             }
+ 
+             override fun onPageFinished(view: WebView?, url: String?) {
+                 swipeRefreshLayout.isRefreshing = false
+-                view?.evaluateJavascript(adBlocker.getEffectiveCosmeticScript(), null)
++                if (docStartHandler == null) {
++                    view?.evaluateJavascript(adBlocker.getEffectiveCosmeticScript(), null)
++                }
+             }
+ 
+             override fun onReceivedError(
+@@ -608,17 +910,23 @@ class MainActivity : AppCompatActivity() {
+     }
+ 
+     private fun onVideoStreamFound(url: String) {
++        // Cast yoksa (TV/Pi veya Play Services yok) afişi hiç gösterme
++        if (castContext == null || tvMode) return
++        // Aynı adres tekrar tekrar bildirilirse yok say: yayın sürekli baştan yüklenmesin
++        if (url == lastDetectedVideoUrl) return
++        // Master playlist zaten yakalandıysa aynı sunucudaki alt playlist onu ezmesin
++        val prev = lastDetectedVideoUrl
++        if (prev != null && prev.contains(".m3u8") && url.contains(".m3u8") &&
++            Uri.parse(prev).host == Uri.parse(url).host &&
++            prev.contains("master", ignoreCase = true)) {
++            return
++        }
+         lastDetectedVideoUrl = url
+         lastDetectedVideoTitle = webView.title ?: "Dizilla Video"
+         txtCastStreamInfo.text = "Akış: ${Uri.parse(url).host ?: "Video"}"
+         castStreamBanner.visibility = View.VISIBLE
+-
+-        // Auto cast if Cast Session is actively connected
+-        currentCastSession?.let { session ->
+-            if (session.isConnected) {
+-                castVideo(url, lastDetectedVideoTitle)
+-            }
+-        }
++        // Otomatik yayın kaldırıldı: yalnızca kullanıcı "TV'de Oynat"a bastığında veya
++        // Cast oturumu yeni başladığında (sessionManagerListener) gönderilir.
+     }
+ 
+     fun castVideo(videoUrl: String, title: String) {
+@@ -735,7 +1043,8 @@ class MainActivity : AppCompatActivity() {
+ 
+     override fun onUserLeaveHint() {
+         super.onUserLeaveHint()
+-        if (customView != null) {
++        // TV'de PiP kullanılmaz
++        if (customView != null && !tvMode) {
+             enterPipMode()
+         }
+     }
+@@ -764,7 +1073,10 @@ class MainActivity : AppCompatActivity() {
+         try {
+             castContext?.sessionManager?.removeSessionManagerListener(sessionManagerListener, CastSession::class.java)
+         } catch (e: Exception) {}
+-        webView.destroy()
++        if (::webView.isInitialized) {
++            (webView.parent as? ViewGroup)?.removeView(webView)
++            webView.destroy()
++        }
+         super.onDestroy()
+     }
+ }
+diff --git a/app/src/main/java/com/example/SettingsScreen.kt b/app/src/main/java/com/example/SettingsScreen.kt
+index 835be93..0484b92 100644
+--- a/app/src/main/java/com/example/SettingsScreen.kt
++++ b/app/src/main/java/com/example/SettingsScreen.kt
+@@ -103,6 +103,8 @@ fun SettingsScreen(
+     var currentActiveUrl by remember { mutableStateOf(addressManager.currentUrl ?: "") }
+     var sameSiteMode by remember { mutableStateOf(addressManager.sameSiteMode) }
+     var recentUrls by remember { mutableStateOf(addressManager.getRecentUrls()) }
++    var tvModeSetting by remember { mutableStateOf(addressManager.tvMode) }
++    var uaModeSetting by remember { mutableStateOf(addressManager.uaMode) }
+ 
+     // Dialog states
+     var showChangeUrlDialog by remember { mutableStateOf(false) }
+@@ -642,6 +644,52 @@ fun SettingsScreen(
+                     }
+                 }
+ 
++                // SECTION 3b: TV Modu & Görünüm (Kumanda)
++                Card(
++                    modifier = Modifier.fillMaxWidth(),
++                    shape = RoundedCornerShape(16.dp),
++                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
++                ) {
++                    Column(modifier = Modifier.padding(16.dp)) {
++                        Text(
++                            text = "TV Modu & Görünüm",
++                            fontWeight = FontWeight.Bold,
++                            color = Color.White,
++                            fontSize = 15.sp
++                        )
++                        Spacer(modifier = Modifier.height(4.dp))
++                        Text(
++                            text = "Değişiklikler uygulama yeniden açılınca geçerli olur. TV modunda sanal imleç, masaüstü görünüm ve yatay ekran kullanılır; Cast ve PiP kapanır. Menü veya Info tuşu imleç/odak modunu değiştirir.",
++                            color = Color(0xFF94A3B8),
++                            fontSize = 11.sp
++                        )
++
++                        Spacer(modifier = Modifier.height(12.dp))
++                        Text("TV modu:", color = Color(0xFFE2E8F0), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
++                        Spacer(modifier = Modifier.height(6.dp))
++                        OptionRow(
++                            options = listOf("Otomatik" to TvMode.AUTO, "Açık" to TvMode.ON, "Kapalı" to TvMode.OFF),
++                            selected = tvModeSetting,
++                            onSelect = {
++                                tvModeSetting = it
++                                addressManager.tvMode = it
++                            }
++                        )
++
++                        Spacer(modifier = Modifier.height(12.dp))
++                        Text("Site görünümü:", color = Color(0xFFE2E8F0), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
++                        Spacer(modifier = Modifier.height(6.dp))
++                        OptionRow(
++                            options = listOf("Otomatik" to UaMode.AUTO, "Mobil" to UaMode.MOBILE, "Masaüstü" to UaMode.DESKTOP),
++                            selected = uaModeSetting,
++                            onSelect = {
++                                uaModeSetting = it
++                                addressManager.uaMode = it
++                            }
++                        )
++                    }
++                }
++
+                 // SECTION 4: Keşif Modu & Log Sharing
+                 Card(
+                     modifier = Modifier.fillMaxWidth(),
+@@ -746,6 +794,41 @@ fun SettingsScreen(
+     }
+ }
+ 
++/** Kumandayla seçilebilir (focusable) yatay seçenek satırı. */
++@Composable
++fun <T> OptionRow(
++    options: List<Pair<String, T>>,
++    selected: T,
++    onSelect: (T) -> Unit
++) {
++    Row(
++        modifier = Modifier.fillMaxWidth(),
++        horizontalArrangement = Arrangement.spacedBy(8.dp)
++    ) {
++        options.forEach { (label, value) ->
++            val isSelected = value == selected
++            if (isSelected) {
++                Button(
++                    onClick = { onSelect(value) },
++                    modifier = Modifier.weight(1f).focusable(),
++                    shape = RoundedCornerShape(8.dp),
++                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0891B2))
++                ) {
++                    Text(label, fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
++                }
++            } else {
++                OutlinedButton(
++                    onClick = { onSelect(value) },
++                    modifier = Modifier.weight(1f).focusable(),
++                    shape = RoundedCornerShape(8.dp)
++                ) {
++                    Text(label, fontSize = 12.sp, color = Color(0xFF94A3B8))
++                }
++            }
++        }
++    }
++}
++
+ @Composable
+ fun ChangeUrlDialog(
+     currentUrl: String,
+diff --git a/app/src/main/java/com/example/SiteAddressManager.kt b/app/src/main/java/com/example/SiteAddressManager.kt
+index 0c2c313..7da05fe 100644
+--- a/app/src/main/java/com/example/SiteAddressManager.kt
++++ b/app/src/main/java/com/example/SiteAddressManager.kt
+@@ -11,6 +11,12 @@ enum class SameSiteMode {
+     FLEXIBLE
+ }
+ 
++/** TV modu: AUTO = cihaz TV ise açık (leanback / televizyon arayüz modu / dokunmatik yok). */
++enum class TvMode { AUTO, ON, OFF }
++
++/** Kullanıcı ajanı: AUTO = TV'de masaüstü, telefonda mobil (site profili de dikkate alınır). */
++enum class UaMode { AUTO, MOBILE, DESKTOP }
++
+ class SiteAddressManager(private val context: Context) {
+ 
+     companion object {
+@@ -18,6 +24,8 @@ class SiteAddressManager(private val context: Context) {
+         private const val KEY_ACTIVE_URL = "active_site_url"
+         private const val KEY_RECENT_URLS = "recent_site_urls"
+         private const val KEY_SAME_SITE_MODE = "same_site_mode"
++        private const val KEY_TV_MODE = "tv_mode"
++        private const val KEY_UA_MODE = "ua_mode"
+         const val MAX_RECENT_URLS = 10
+     }
+ 
+@@ -58,6 +66,26 @@ class SiteAddressManager(private val context: Context) {
+             prefs.edit().putString(KEY_SAME_SITE_MODE, value.name).apply()
+         }
+ 
++    var tvMode: TvMode
++        get() = try {
++            TvMode.valueOf(prefs.getString(KEY_TV_MODE, TvMode.AUTO.name) ?: TvMode.AUTO.name)
++        } catch (e: Exception) {
++            TvMode.AUTO
++        }
++        set(value) {
++            prefs.edit().putString(KEY_TV_MODE, value.name).apply()
++        }
++
++    var uaMode: UaMode
++        get() = try {
++            UaMode.valueOf(prefs.getString(KEY_UA_MODE, UaMode.AUTO.name) ?: UaMode.AUTO.name)
++        } catch (e: Exception) {
++            UaMode.AUTO
++        }
++        set(value) {
++            prefs.edit().putString(KEY_UA_MODE, value.name).apply()
++        }
++
+     fun getRecentUrls(): List<String> {
+         val jsonStr = prefs.getString(KEY_RECENT_URLS, null) ?: return emptyList()
+         val list = mutableListOf<String>()
+diff --git a/app/src/main/res/drawable/tv_banner.xml b/app/src/main/res/drawable/tv_banner.xml
+new file mode 100644
+index 0000000..d8fde3e
+--- /dev/null
++++ b/app/src/main/res/drawable/tv_banner.xml
+@@ -0,0 +1,14 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Android TV ana ekran afişi (320x180 oranında): koyu zemin üstünde uygulama simgesi -->
++<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
++    <item>
++        <shape android:shape="rectangle">
++            <solid android:color="#111827" />
++        </shape>
++    </item>
++    <item
++        android:width="110dp"
++        android:height="110dp"
++        android:gravity="center"
++        android:drawable="@drawable/dizilla_launcher_icon_1792242421690" />
++</layer-list>
+diff --git a/app/src/main/res/layout/activity_main.xml b/app/src/main/res/layout/activity_main.xml
+index 52cbc95..227b847 100644
+--- a/app/src/main/res/layout/activity_main.xml
++++ b/app/src/main/res/layout/activity_main.xml
+@@ -324,6 +324,13 @@
+         </RelativeLayout>
+     </FrameLayout>
+ 
++    <!-- Kumanda sanal imleci (yalnızca TV modunda görünür) -->
++    <com.example.CursorView
++        android:id="@+id/cursorView"
++        android:layout_width="match_parent"
++        android:layout_height="match_parent"
++        android:visibility="gone" />
++
+     <!-- Jetpack Compose Settings Overlay -->
+     <androidx.compose.ui.platform.ComposeView
+         android:id="@+id/composeSettingsView"
+diff --git a/build.gradle.kts b/build.gradle.kts
+index a0be215..c219ecc 100644
+--- a/build.gradle.kts
++++ b/build.gradle.kts
+@@ -2,7 +2,4 @@
+ plugins {
+   alias(libs.plugins.android.application) apply false
+   alias(libs.plugins.kotlin.compose) apply false
+-  alias(libs.plugins.google.devtools.ksp) apply false
+-  alias(libs.plugins.secrets) apply false
+-  alias(libs.plugins.google.services) apply false
+ }
+diff --git a/gradle.properties b/gradle.properties
+index bf26ee5..5325414 100644
+--- a/gradle.properties
++++ b/gradle.properties
+@@ -24,5 +24,3 @@ org.gradle.workers.max=4
+ # Set the Kotlin compiler execution strategy to in-process to avoid "Could not
+ # connect to Kotlin compile daemon" error.
+ kotlin.compiler.execution.strategy=in-process
+-# Allow the google-services plugin to work even if the google-services.json is not present.
+-googleServices.missing.passthrough=true
+diff --git a/gradle/wrapper/gradle-wrapper.jar b/gradle/wrapper/gradle-wrapper.jar
+new file mode 100644
+index 0000000000000000000000000000000000000000..1b33c55baabb587c669f562ae36f953de2481846
+GIT binary patch
+literal 43764
+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
+z8RF{n%ouSp0gNT|g-GkrG)9%0Dh<dNX1S!$*m&;|5ODL6QwAmZ!{!ahS37fkGg@+c
+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
+K0Q#OFKm8BJ5$)0d
+
+literal 0
+HcmV?d00001
+
+diff --git a/gradlew b/gradlew
+new file mode 100755
+index 0000000..23d15a9
+--- /dev/null
++++ b/gradlew
+@@ -0,0 +1,251 @@
++#!/bin/sh
++
++#
++# Copyright © 2015-2021 the original authors.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      https://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++#
++# SPDX-License-Identifier: Apache-2.0
++#
++
++##############################################################################
++#
++#   Gradle start up script for POSIX generated by Gradle.
++#
++#   Important for running:
++#
++#   (1) You need a POSIX-compliant shell to run this script. If your /bin/sh is
++#       noncompliant, but you have some other compliant shell such as ksh or
++#       bash, then to run this script, type that shell name before the whole
++#       command line, like:
++#
++#           ksh Gradle
++#
++#       Busybox and similar reduced shells will NOT work, because this script
++#       requires all of these POSIX shell features:
++#         * functions;
++#         * expansions «$var», «${var}», «${var:-default}», «${var+SET}»,
++#           «${var#prefix}», «${var%suffix}», and «$( cmd )»;
++#         * compound commands having a testable exit status, especially «case»;
++#         * various built-in commands including «command», «set», and «ulimit».
++#
++#   Important for patching:
++#
++#   (2) This script targets any POSIX shell, so it avoids extensions provided
++#       by Bash, Ksh, etc; in particular arrays are avoided.
++#
++#       The "traditional" practice of packing multiple parameters into a
++#       space-separated string is a well documented source of bugs and security
++#       problems, so this is (mostly) avoided, by progressively accumulating
++#       options in "$@", and eventually passing that to Java.
++#
++#       Where the inherited environment variables (DEFAULT_JVM_OPTS, JAVA_OPTS,
++#       and GRADLE_OPTS) rely on word-splitting, this is performed explicitly;
++#       see the in-line comments for details.
++#
++#       There are tweaks for specific operating systems such as AIX, CygWin,
++#       Darwin, MinGW, and NonStop.
++#
++#   (3) This script is generated from the Groovy template
++#       https://github.com/gradle/gradle/blob/HEAD/platforms/jvm/plugins-application/src/main/resources/org/gradle/api/internal/plugins/unixStartScript.txt
++#       within the Gradle project.
++#
++#       You can find Gradle at https://github.com/gradle/gradle/.
++#
++##############################################################################
++
++# Attempt to set APP_HOME
++
++# Resolve links: $0 may be a link
++app_path=$0
++
++# Need this for daisy-chained symlinks.
++while
++    APP_HOME=${app_path%"${app_path##*/}"}  # leaves a trailing /; empty if no leading path
++    [ -h "$app_path" ]
++do
++    ls=$( ls -ld "$app_path" )
++    link=${ls#*' -> '}
++    case $link in             #(
++      /*)   app_path=$link ;; #(
++      *)    app_path=$APP_HOME$link ;;
++    esac
++done
++
++# This is normally unused
++# shellcheck disable=SC2034
++APP_BASE_NAME=${0##*/}
++# Discard cd standard output in case $CDPATH is set (https://github.com/gradle/gradle/issues/25036)
++APP_HOME=$( cd -P "${APP_HOME:-./}" > /dev/null && printf '%s\n' "$PWD" ) || exit
++
++# Use the maximum available, or set MAX_FD != -1 to use that value.
++MAX_FD=maximum
++
++warn () {
++    echo "$*"
++} >&2
++
++die () {
++    echo
++    echo "$*"
++    echo
++    exit 1
++} >&2
++
++# OS specific support (must be 'true' or 'false').
++cygwin=false
++msys=false
++darwin=false
++nonstop=false
++case "$( uname )" in                #(
++  CYGWIN* )         cygwin=true  ;; #(
++  Darwin* )         darwin=true  ;; #(
++  MSYS* | MINGW* )  msys=true    ;; #(
++  NONSTOP* )        nonstop=true ;;
++esac
++
++CLASSPATH="\\\"\\\""
++
++
++# Determine the Java command to use to start the JVM.
++if [ -n "$JAVA_HOME" ] ; then
++    if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
++        # IBM's JDK on AIX uses strange locations for the executables
++        JAVACMD=$JAVA_HOME/jre/sh/java
++    else
++        JAVACMD=$JAVA_HOME/bin/java
++    fi
++    if [ ! -x "$JAVACMD" ] ; then
++        die "ERROR: JAVA_HOME is set to an invalid directory: $JAVA_HOME
++
++Please set the JAVA_HOME variable in your environment to match the
++location of your Java installation."
++    fi
++else
++    JAVACMD=java
++    if ! command -v java >/dev/null 2>&1
++    then
++        die "ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
++
++Please set the JAVA_HOME variable in your environment to match the
++location of your Java installation."
++    fi
++fi
++
++# Increase the maximum file descriptors if we can.
++if ! "$cygwin" && ! "$darwin" && ! "$nonstop" ; then
++    case $MAX_FD in #(
++      max*)
++        # In POSIX sh, ulimit -H is undefined. That's why the result is checked to see if it worked.
++        # shellcheck disable=SC2039,SC3045
++        MAX_FD=$( ulimit -H -n ) ||
++            warn "Could not query maximum file descriptor limit"
++    esac
++    case $MAX_FD in  #(
++      '' | soft) :;; #(
++      *)
++        # In POSIX sh, ulimit -n is undefined. That's why the result is checked to see if it worked.
++        # shellcheck disable=SC2039,SC3045
++        ulimit -n "$MAX_FD" ||
++            warn "Could not set maximum file descriptor limit to $MAX_FD"
++    esac
++fi
++
++# Collect all arguments for the java command, stacking in reverse order:
++#   * args from the command line
++#   * the main class name
++#   * -classpath
++#   * -D...appname settings
++#   * --module-path (only if needed)
++#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and GRADLE_OPTS environment variables.
++
++# For Cygwin or MSYS, switch paths to Windows format before running java
++if "$cygwin" || "$msys" ; then
++    APP_HOME=$( cygpath --path --mixed "$APP_HOME" )
++    CLASSPATH=$( cygpath --path --mixed "$CLASSPATH" )
++
++    JAVACMD=$( cygpath --unix "$JAVACMD" )
++
++    # Now convert the arguments - kludge to limit ourselves to /bin/sh
++    for arg do
++        if
++            case $arg in                                #(
++              -*)   false ;;                            # don't mess with options #(
++              /?*)  t=${arg#/} t=/${t%%/*}              # looks like a POSIX filepath
++                    [ -e "$t" ] ;;                      #(
++              *)    false ;;
++            esac
++        then
++            arg=$( cygpath --path --ignore --mixed "$arg" )
++        fi
++        # Roll the args list around exactly as many times as the number of
++        # args, so each arg winds up back in the position where it started, but
++        # possibly modified.
++        #
++        # NB: a `for` loop captures its iteration list before it begins, so
++        # changing the positional parameters here affects neither the number of
++        # iterations, nor the values presented in `arg`.
++        shift                   # remove old arg
++        set -- "$@" "$arg"      # push replacement arg
++    done
++fi
++
++
++# Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
++DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
++
++# Collect all arguments for the java command:
++#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and optsEnvironmentVar are not allowed to contain shell fragments,
++#     and any embedded shellness will be escaped.
++#   * For example: A user cannot expect ${Hostname} to be expanded, as it is an environment variable and will be
++#     treated as '${Hostname}' itself on the command line.
++
++set -- \
++        "-Dorg.gradle.appname=$APP_BASE_NAME" \
++        -classpath "$CLASSPATH" \
++        -jar "$APP_HOME/gradle/wrapper/gradle-wrapper.jar" \
++        "$@"
++
++# Stop when "xargs" is not available.
++if ! command -v xargs >/dev/null 2>&1
++then
++    die "xargs is not available"
++fi
++
++# Use "xargs" to parse quoted args.
++#
++# With -n1 it outputs one arg per line, with the quotes and backslashes removed.
++#
++# In Bash we could simply go:
++#
++#   readarray ARGS < <( xargs -n1 <<<"$var" ) &&
++#   set -- "${ARGS[@]}" "$@"
++#
++# but POSIX shell has neither arrays nor command substitution, so instead we
++# post-process each arg (as a line of input to sed) to backslash-escape any
++# character that might be a shell metacharacter, then use eval to reverse
++# that process (while maintaining the separation between arguments), and wrap
++# the whole thing up as a single "set" statement.
++#
++# This will of course break if any of these variables contains a newline or
++# an unmatched quote.
++#
++
++eval "set -- $(
++        printf '%s\n' "$DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS" |
++        xargs -n1 |
++        sed ' s~[^-[:alnum:]+,./:=@_]~\\&~g; ' |
++        tr '\n' ' '
++    )" '"$@"'
++
++exec "$JAVACMD" "$@"
+diff --git a/gradlew.bat b/gradlew.bat
+new file mode 100644
+index 0000000..5eed7ee
+--- /dev/null
++++ b/gradlew.bat
+@@ -0,0 +1,94 @@
++@rem
++@rem Copyright 2015 the original author or authors.
++@rem
++@rem Licensed under the Apache License, Version 2.0 (the "License");
++@rem you may not use this file except in compliance with the License.
++@rem You may obtain a copy of the License at
++@rem
++@rem      https://www.apache.org/licenses/LICENSE-2.0
++@rem
++@rem Unless required by applicable law or agreed to in writing, software
++@rem distributed under the License is distributed on an "AS IS" BASIS,
++@rem WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++@rem See the License for the specific language governing permissions and
++@rem limitations under the License.
++@rem
++@rem SPDX-License-Identifier: Apache-2.0
++@rem
++
++@if "%DEBUG%"=="" @echo off
++@rem ##########################################################################
++@rem
++@rem  Gradle startup script for Windows
++@rem
++@rem ##########################################################################
++
++@rem Set local scope for the variables with windows NT shell
++if "%OS%"=="Windows_NT" setlocal
++
++set DIRNAME=%~dp0
++if "%DIRNAME%"=="" set DIRNAME=.
++@rem This is normally unused
++set APP_BASE_NAME=%~n0
++set APP_HOME=%DIRNAME%
++
++@rem Resolve any "." and ".." in APP_HOME to make it shorter.
++for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
++
++@rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
++set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
++
++@rem Find java.exe
++if defined JAVA_HOME goto findJavaFromJavaHome
++
++set JAVA_EXE=java.exe
++%JAVA_EXE% -version >NUL 2>&1
++if %ERRORLEVEL% equ 0 goto execute
++
++echo. 1>&2
++echo ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH. 1>&2
++echo. 1>&2
++echo Please set the JAVA_HOME variable in your environment to match the 1>&2
++echo location of your Java installation. 1>&2
++
++goto fail
++
++:findJavaFromJavaHome
++set JAVA_HOME=%JAVA_HOME:"=%
++set JAVA_EXE=%JAVA_HOME%/bin/java.exe
++
++if exist "%JAVA_EXE%" goto execute
++
++echo. 1>&2
++echo ERROR: JAVA_HOME is set to an invalid directory: %JAVA_HOME% 1>&2
++echo. 1>&2
++echo Please set the JAVA_HOME variable in your environment to match the 1>&2
++echo location of your Java installation. 1>&2
++
++goto fail
++
++:execute
++@rem Setup the command line
++
++set CLASSPATH=
++
++
++@rem Execute Gradle
++"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" -jar "%APP_HOME%\gradle\wrapper\gradle-wrapper.jar" %*
++
++:end
++@rem End local scope for the variables with windows NT shell
++if %ERRORLEVEL% equ 0 goto mainEnd
++
++:fail
++rem Set variable GRADLE_EXIT_CONSOLE if you need the _script_ return code instead of
++rem the _cmd.exe /c_ return code!
++set EXIT_CODE=%ERRORLEVEL%
++if %EXIT_CODE% equ 0 set EXIT_CODE=1
++if not ""=="%GRADLE_EXIT_CONSOLE%" exit %EXIT_CODE%
++exit /b %EXIT_CODE%
++
++:mainEnd
++if "%OS%"=="Windows_NT" endlocal
++
++:omega
+-- 
+2.43.0

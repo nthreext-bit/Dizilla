@@ -39,6 +39,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -59,6 +60,11 @@ import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
+import android.graphics.Color
+import android.os.Handler
+import android.os.Looper
+import android.view.KeyEvent
+import android.view.MotionEvent
 
 class MainActivity : AppCompatActivity() {
 
@@ -66,7 +72,20 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "DizillaApp"
         private const val MOBILE_USER_AGENT =
             "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36"
+        private const val DESKTOP_USER_AGENT =
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+        fun isAdVideoUrl(url: String): Boolean {
+            val lower = url.lowercase(Locale.ROOT)
+            return lower.contains("doubleclick") || lower.contains("googleads") ||
+                   lower.contains("popads") || lower.contains("vignette") ||
+                   lower.contains("adsystem") || lower.contains("adnxs") ||
+                   lower.contains("trafficjunky") || lower.contains("/ads/")
+        }
     }
+
+    private var currentWebViewVersion: String = "Bilinmiyor"
+    private var isTelevision: Boolean = false
 
     private lateinit var addressManager: SiteAddressManager
     private lateinit var profileManager: ProfileManager
@@ -87,6 +106,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSettings: ImageButton
     private lateinit var mediaRouteButton: MediaRouteButton
 
+    // TV Box & Remote Controls
+    private lateinit var btnPointerToggle: ImageButton
+    private lateinit var virtualCursor: ImageView
+    private lateinit var txtTvModeNotice: TextView
+    private var isPointerMode: Boolean = false
+    private var cursorX: Float = -1f
+    private var cursorY: Float = -1f
+    private var cursorStep: Float = 30f
+    private val hideNoticeHandler = Handler(Looper.getMainLooper())
+    private val hideNoticeRunnable = Runnable { txtTvModeNotice.visibility = View.GONE }
+
     // Jetpack Compose Settings / Setup View
     private lateinit var composeSettingsView: ComposeView
 
@@ -101,6 +131,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var fullscreenOverlayControls: View
     private lateinit var btnExitFullscreen: ImageButton
     private lateinit var btnPipFullscreen: ImageButton
+    private lateinit var btnLandscapeToggle: ImageButton
+    private var isLandscapeMenuExpanded: Boolean = false
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
 
@@ -139,7 +171,27 @@ class MainActivity : AppCompatActivity() {
         installSplashScreen()
 
         super.onCreate(savedInstanceState)
+
+        // Support edge-to-edge display cutout in landscape so video/page fills the entire screen
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+
         setContentView(R.layout.activity_main)
+
+        // Read WebView Version
+        val webViewPackage = WebViewCompat.getCurrentWebViewPackage(this)
+        currentWebViewVersion = webViewPackage?.versionName ?: "Bilinmiyor"
+        Log.i(TAG, "WebView Version: $currentWebViewVersion (Package: ${webViewPackage?.packageName})")
+
+        // Detect TV Box / Leanback
+        val uiModeManager = getSystemService(Context.UI_MODE_SERVICE) as? android.app.UiModeManager
+        isTelevision = uiModeManager?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION ||
+                packageManager.hasSystemFeature("android.software.leanback")
+        if (isTelevision) {
+            Log.i(TAG, "Running on Android TV / Leanback box")
+        }
 
         addressManager = SiteAddressManager(this)
         profileManager = ProfileManager(this)
@@ -148,6 +200,7 @@ class MainActivity : AppCompatActivity() {
         adBlocker.siteAddressManager = addressManager
 
         initViews()
+        applyOrientationMode(resources.configuration.orientation)
         setupCast()
         setupWebView()
         setupSwipeRefresh()
@@ -166,6 +219,14 @@ class MainActivity : AppCompatActivity() {
     private fun initViews() {
         mainContentContainer = findViewById(R.id.mainContentContainer)
         topBar = findViewById(R.id.topBar)
+
+        // Apply status bar & display cutout insets so top bar is never cut off in portrait
+        ViewCompat.setOnApplyWindowInsetsListener(topBar) { v, insets ->
+            val statusBars = insets.getInsets(WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.displayCutout())
+            v.setPadding(v.paddingLeft, statusBars.top, v.paddingRight, v.paddingBottom)
+            insets
+        }
+
         webView = findViewById(R.id.webView)
         swipeRefreshLayout = findViewById(R.id.swipeRefreshLayout)
         pageProgressBar = findViewById(R.id.pageProgressBar)
@@ -178,6 +239,22 @@ class MainActivity : AppCompatActivity() {
         btnSettings = findViewById(R.id.btnSettings)
         mediaRouteButton = findViewById(R.id.mediaRouteButton)
 
+        // TV Remote Virtual Pointer & Notice
+        btnPointerToggle = findViewById(R.id.btnPointerToggle)
+        virtualCursor = findViewById(R.id.virtualCursor)
+        txtTvModeNotice = findViewById(R.id.txtTvModeNotice)
+
+        btnPointerToggle.setOnClickListener {
+            togglePointerMode()
+        }
+
+        // Configure D-Pad focus chaining for TV remote
+        btnAdBlockStatus.nextFocusDownId = R.id.webView
+        btnPointerToggle.nextFocusDownId = R.id.webView
+        mediaRouteButton.nextFocusDownId = R.id.webView
+        btnRefresh.nextFocusDownId = R.id.webView
+        btnSettings.nextFocusDownId = R.id.webView
+
         composeSettingsView = findViewById(R.id.composeSettingsView)
 
         castStreamBanner = findViewById(R.id.castStreamBanner)
@@ -189,6 +266,23 @@ class MainActivity : AppCompatActivity() {
         fullscreenOverlayControls = findViewById(R.id.fullscreenOverlayControls)
         btnExitFullscreen = findViewById(R.id.btnExitFullscreen)
         btnPipFullscreen = findViewById(R.id.btnPipFullscreen)
+
+        // Floating Landscape Menu Toggle Button
+        btnLandscapeToggle = findViewById(R.id.btnLandscapeToggle)
+        btnLandscapeToggle.setOnClickListener {
+            if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                isLandscapeMenuExpanded = !isLandscapeMenuExpanded
+                if (isLandscapeMenuExpanded) {
+                    topBar.visibility = View.VISIBLE
+                    btnLandscapeToggle.setImageResource(R.drawable.ic_fullscreen_exit)
+                    btnLandscapeToggle.contentDescription = "Üst Çubuğu Gizle"
+                } else {
+                    topBar.visibility = View.GONE
+                    btnLandscapeToggle.setImageResource(R.drawable.ic_settings)
+                    btnLandscapeToggle.contentDescription = "Üst Çubuğu Göster"
+                }
+            }
+        }
 
         txtDomain.text = addressManager.currentHost ?: "Adres Ayarlanmadı"
 
@@ -261,6 +355,14 @@ class MainActivity : AppCompatActivity() {
             SettingsScreen(
                 adBlocker = adBlocker,
                 addressManager = addressManager,
+                currentProfile = adBlocker.currentProfile,
+                webViewVersion = currentWebViewVersion,
+                onProfileUpdated = { updatedProfile ->
+                    profileManager.saveProfile(updatedProfile)
+                    adBlocker.currentProfile = updatedProfile
+                    applyProfileSettings(updatedProfile)
+                    webView.reload()
+                },
                 onDismiss = {
                     composeSettingsView.visibility = View.GONE
                     updateBadgeCount()
@@ -292,6 +394,23 @@ class MainActivity : AppCompatActivity() {
         val profile = profileManager.getProfileForHost(host)
         adBlocker.currentProfile = profile
         txtDomain.text = if (host.isNotBlank()) host else "Adres Tanımsız"
+        applyProfileSettings(profile)
+    }
+
+    private fun applyProfileSettings(profile: SiteProfile?) {
+        val isDesktop = profile?.desktopMode == true || profile?.userAgentMode.equals("desktop", ignoreCase = true)
+        if (isDesktop) {
+            webView.settings.userAgentString = DESKTOP_USER_AGENT
+        } else {
+            val defaultUa = WebSettings.getDefaultUserAgent(this)
+            val cleanUa = defaultUa.replace("; wv", "").replace("Version/4.0 ", "")
+            webView.settings.userAgentString = cleanUa
+        }
+        webView.settings.useWideViewPort = true
+        webView.settings.loadWithOverviewMode = true
+        if (isTelevision) {
+            webView.settings.textZoom = 115
+        }
     }
 
     private fun clearSiteData() {
@@ -365,6 +484,10 @@ class MainActivity : AppCompatActivity() {
                     customViewCallback?.onCustomViewHidden()
                     onHideCustomView()
                 }
+                isLandscapeMenuExpanded && resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE -> {
+                    isLandscapeMenuExpanded = false
+                    applyOrientationMode(Configuration.ORIENTATION_LANDSCAPE)
+                }
                 webView.canGoBack() -> {
                     webView.goBack()
                 }
@@ -400,11 +523,25 @@ class MainActivity : AppCompatActivity() {
         cookieManager.setAcceptThirdPartyCookies(webView, true)
 
         settings.saveFormData = false
-        try {
-            settings.safeBrowsingEnabled = false
-        } catch (e: Exception) {
-            // Ignored if unsupported
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                settings.safeBrowsingEnabled = false
+            } catch (e: Exception) {
+                // Ignored if unsupported
+            }
         }
+
+        // TV Box & Landscape display optimizations
+        settings.useWideViewPort = true
+        settings.loadWithOverviewMode = true
+        settings.textZoom = if (isTelevision) 115 else 105
+        settings.setSupportZoom(true)
+        settings.builtInZoomControls = false
+        settings.displayZoomControls = false
+
+        // D-Pad focusability on TV
+        webView.isFocusable = true
+        webView.isFocusableInTouchMode = true
 
         // Cosmetic script injection at document start if supported
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
@@ -424,7 +561,7 @@ class MainActivity : AppCompatActivity() {
         webView.addJavascriptInterface(object {
             @JavascriptInterface
             fun onVideoDetected(src: String?) {
-                if (!src.isNullOrBlank()) {
+                if (!src.isNullOrBlank() && !isAdVideoUrl(src)) {
                     runOnUiThread { onVideoStreamFound(src) }
                 }
             }
@@ -478,10 +615,11 @@ class MainActivity : AppCompatActivity() {
                 val uri = request?.url ?: return null
                 val uriString = uri.toString().lowercase(Locale.ROOT)
 
-                // Detect video stream URLs
-                if (uriString.contains(".m3u8") || uriString.contains(".mp4") ||
-                    uriString.contains("/hls/") || uriString.contains("videoplayback") ||
-                    uriString.contains(".mp4?") || uriString.contains(".m3u8?")) {
+                // Detect video stream URLs (ignoring ad and tracking videos)
+                if ((uriString.contains(".m3u8") || uriString.contains(".mp4") ||
+                     uriString.contains("/hls/") || uriString.contains("videoplayback") ||
+                     uriString.contains(".mp4?") || uriString.contains(".m3u8?")) &&
+                    !isAdVideoUrl(uriString)) {
                     runOnUiThread {
                         onVideoStreamFound(uri.toString())
                     }
@@ -540,21 +678,20 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // SUBFRAME / IFRAME CHECK: Never block iframe navigations in shouldOverrideUrlLoading!
-                // Blocking subframes in shouldOverrideUrlLoading causes ERR_BLOCKED_BY_RESPONSE or player load failure.
                 if (request.isForMainFrame == false) {
                     return false
                 }
 
-                // Google Sign-In Support (accounts.google.com)
-                if (host == "accounts.google.com" || host.endsWith(".google.com") || host.endsWith(".google.com.tr") || host.endsWith(".youtube.com")) {
-                    Log.d("AdBlock", "Allowing Google Sign-In navigation: $uri")
-                    return false
-                }
-
-                // Block if in active profile or global blocklist
+                // 1. Block if in active profile or global blocklist (FIRST, so ad domains are never white-listed)
                 if (adBlocker.isBlocked(host) != null) {
                     Log.d("AdBlock", "Blocked navigation to blocked domain: $host")
                     return true
+                }
+
+                // 2. Google Sign-In Support (strictly accounts.google.com and oauth, not broad *.google.com)
+                if (host == "accounts.google.com" || host == "oauth2.googleapis.com" || host.startsWith("accounts.youtube.")) {
+                    Log.d("AdBlock", "Allowing Google Sign-In navigation: $uri")
+                    return false
                 }
 
                 // Dynamic same-site policy or allowlist check
@@ -625,6 +762,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onVideoStreamFound(url: String) {
+        if (isAdVideoUrl(url)) return
+        if (lastDetectedVideoUrl == url && currentCastSession?.isConnected == true) {
+            return
+        }
         lastDetectedVideoUrl = url
         lastDetectedVideoTitle = webView.title ?: "Dizilla Video"
         txtCastStreamInfo.text = "Akış: ${Uri.parse(url).host ?: "Video"}"
@@ -692,6 +833,7 @@ class MainActivity : AppCompatActivity() {
         )
         fullscreenContainer.visibility = View.VISIBLE
         fullscreenOverlayControls.visibility = View.VISIBLE
+        btnLandscapeToggle.visibility = View.GONE
 
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -713,7 +855,39 @@ class MainActivity : AppCompatActivity() {
 
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        setSystemBarsVisible(true)
+        applyOrientationMode(resources.configuration.orientation)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyOrientationMode(newConfig.orientation)
+    }
+
+    private fun applyOrientationMode(orientation: Int) {
+        if (customView != null || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode)) {
+            return
+        }
+
+        if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            // Landscape: Immersive fullscreen edge-to-edge
+            setSystemBarsVisible(false)
+            if (!isLandscapeMenuExpanded) {
+                topBar.visibility = View.GONE
+                btnLandscapeToggle.setImageResource(R.drawable.ic_settings)
+                btnLandscapeToggle.contentDescription = "Üst Çubuğu Göster"
+            } else {
+                topBar.visibility = View.VISIBLE
+                btnLandscapeToggle.setImageResource(R.drawable.ic_fullscreen_exit)
+                btnLandscapeToggle.contentDescription = "Üst Çubuğu Gizle"
+            }
+            btnLandscapeToggle.visibility = View.VISIBLE
+        } else {
+            // Portrait: Standard layout with top header and visible system bars
+            setSystemBarsVisible(true)
+            topBar.visibility = View.VISIBLE
+            btnLandscapeToggle.visibility = View.GONE
+            isLandscapeMenuExpanded = false
+        }
     }
 
     private fun setSystemBarsVisible(visible: Boolean) {
@@ -765,14 +939,14 @@ class MainActivity : AppCompatActivity() {
         if (isInPictureInPictureMode) {
             fullscreenOverlayControls.visibility = View.GONE
             topBar.visibility = View.GONE
+            btnLandscapeToggle.visibility = View.GONE
             setSystemBarsVisible(false)
         } else {
             if (customView != null) {
                 fullscreenOverlayControls.visibility = View.VISIBLE
                 setSystemBarsVisible(false)
             } else {
-                topBar.visibility = View.VISIBLE
-                setSystemBarsVisible(true)
+                applyOrientationMode(resources.configuration.orientation)
             }
         }
     }
@@ -885,7 +1059,224 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun togglePointerMode(enabled: Boolean? = null) {
+        isPointerMode = enabled ?: !isPointerMode
+        if (isPointerMode) {
+            virtualCursor.visibility = View.VISIBLE
+            btnPointerToggle.setColorFilter(Color.parseColor("#06B6D4"))
+            if (cursorX < 0 || cursorY < 0) {
+                cursorX = (webView.width / 2f).coerceAtLeast(100f)
+                cursorY = (webView.height / 2f).coerceAtLeast(100f)
+            }
+            updateCursorPosition(cursorX, cursorY)
+            txtTvModeNotice.text = "Kumanda Fare Modu: Yön Tuşları (Hareket) • OK (Tıkla) • Mavi Tuş / Menü (Kapat)"
+            txtTvModeNotice.visibility = View.VISIBLE
+            hideNoticeHandler.removeCallbacks(hideNoticeRunnable)
+            hideNoticeHandler.postDelayed(hideNoticeRunnable, 4000)
+        } else {
+            virtualCursor.visibility = View.GONE
+            btnPointerToggle.clearColorFilter()
+            txtTvModeNotice.text = "Normal Kaydırma Moduna Geçildi"
+            txtTvModeNotice.visibility = View.VISIBLE
+            hideNoticeHandler.removeCallbacks(hideNoticeRunnable)
+            hideNoticeHandler.postDelayed(hideNoticeRunnable, 2500)
+        }
+    }
+
+    private fun updateCursorPosition(x: Float, y: Float) {
+        val maxX = (rootLayout.width - virtualCursor.width).coerceAtLeast(0).toFloat()
+        val maxY = (rootLayout.height - virtualCursor.height).coerceAtLeast(0).toFloat()
+        cursorX = x.coerceIn(0f, maxX)
+        cursorY = y.coerceIn(0f, maxY)
+        virtualCursor.x = cursorX
+        virtualCursor.y = cursorY
+    }
+
+    private val rootLayout: View
+        get() = findViewById(R.id.rootLayout)
+
+    private fun simulateClickAtCursor() {
+        val now = android.os.SystemClock.uptimeMillis()
+        val location = IntArray(2)
+        webView.getLocationOnScreen(location)
+
+        val clickX = cursorX - location[0] + (virtualCursor.width / 4f)
+        val clickY = cursorY - location[1] + (virtualCursor.height / 4f)
+
+        val downEvent = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, clickX, clickY, 0)
+        val upEvent = MotionEvent.obtain(now, now + 40, MotionEvent.ACTION_UP, clickX, clickY, 0)
+
+        webView.dispatchTouchEvent(downEvent)
+        webView.dispatchTouchEvent(upEvent)
+
+        downEvent.recycle()
+        upEvent.recycle()
+
+        // Visual click feedback
+        virtualCursor.animate()
+            .scaleX(0.75f)
+            .scaleY(0.75f)
+            .setDuration(70)
+            .withEndAction {
+                virtualCursor.animate().scaleX(1.0f).scaleY(1.0f).setDuration(70).start()
+            }
+            .start()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val action = event.action
+        val keyCode = event.keyCode
+
+        // TV Remote Shortcuts (Menu & Color Keys)
+        if (action == KeyEvent.ACTION_DOWN) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_MENU,
+                KeyEvent.KEYCODE_PROG_GREEN -> {
+                    if (composeSettingsView.visibility == View.VISIBLE) {
+                        composeSettingsView.visibility = View.GONE
+                        updateBadgeCount()
+                    } else {
+                        showSettingsScreen()
+                    }
+                    return true
+                }
+                KeyEvent.KEYCODE_PROG_BLUE,
+                KeyEvent.KEYCODE_BUTTON_SELECT,
+                KeyEvent.KEYCODE_SEARCH,
+                KeyEvent.KEYCODE_BOOKMARK -> {
+                    togglePointerMode()
+                    return true
+                }
+                KeyEvent.KEYCODE_PROG_RED -> {
+                    webView.reload()
+                    return true
+                }
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                KeyEvent.KEYCODE_MEDIA_PLAY,
+                KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                    triggerVideoPlayPause()
+                    return true
+                }
+                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                    seekVideo(10)
+                    return true
+                }
+                KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                    seekVideo(-10)
+                    return true
+                }
+            }
+        }
+
+        // 1. Virtual Mouse Pointer Mode
+        if (isPointerMode && composeSettingsView.visibility != View.VISIBLE) {
+            val step = if (event.repeatCount > 0) cursorStep * 1.8f else cursorStep
+            if (action == KeyEvent.ACTION_DOWN || action == KeyEvent.ACTION_MULTIPLE) {
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        updateCursorPosition(cursorX, cursorY - step)
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        updateCursorPosition(cursorX, cursorY + step)
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        updateCursorPosition(cursorX - step, cursorY)
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        updateCursorPosition(cursorX + step, cursorY)
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_CENTER,
+                    KeyEvent.KEYCODE_ENTER,
+                    KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                        simulateClickAtCursor()
+                        return true
+                    }
+                }
+            }
+        }
+
+        // 2. Normal TV Navigation Mode (WebView scrolling & top bar focus)
+        if (!isPointerMode && composeSettingsView.visibility != View.VISIBLE && customView == null) {
+            if (action == KeyEvent.ACTION_DOWN) {
+                if (currentFocus == webView || currentFocus == null) {
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            webView.scrollBy(0, 180)
+                            return true
+                        }
+                        KeyEvent.KEYCODE_DPAD_UP -> {
+                            if (webView.scrollY > 15) {
+                                webView.scrollBy(0, -180)
+                                return true
+                            } else {
+                                btnAdBlockStatus.requestFocus()
+                                return true
+                            }
+                        }
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                            webView.scrollBy(120, 0)
+                            return true
+                        }
+                        KeyEvent.KEYCODE_DPAD_LEFT -> {
+                            webView.scrollBy(-120, 0)
+                            return true
+                        }
+                    }
+                }
+            }
+        }
+
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun triggerVideoPlayPause() {
+        val js = """
+            (function() {
+                var v = document.querySelector('video');
+                if (!v) {
+                    var iframes = document.querySelectorAll('iframe');
+                    for (var i = 0; i < iframes.length; i++) {
+                        try {
+                            var iv = iframes[i].contentDocument.querySelector('video');
+                            if (iv) { v = iv; break; }
+                        } catch(e) {}
+                    }
+                }
+                if (v) {
+                    if (v.paused) v.play(); else v.pause();
+                }
+            })();
+        """.trimIndent()
+        webView.evaluateJavascript(js, null)
+    }
+
+    private fun seekVideo(seconds: Int) {
+        val js = """
+            (function() {
+                var v = document.querySelector('video');
+                if (!v) {
+                    var iframes = document.querySelectorAll('iframe');
+                    for (var i = 0; i < iframes.length; i++) {
+                        try {
+                            var iv = iframes[i].contentDocument.querySelector('video');
+                            if (iv) { v = iv; break; }
+                        } catch(e) {}
+                    }
+                }
+                if (v) {
+                    v.currentTime += ($seconds);
+                }
+            })();
+        """.trimIndent()
+        webView.evaluateJavascript(js, null)
+    }
+
     override fun onDestroy() {
+        hideNoticeHandler.removeCallbacks(hideNoticeRunnable)
         try {
             castContext?.sessionManager?.removeSessionManagerListener(sessionManagerListener, CastSession::class.java)
         } catch (e: Exception) {}

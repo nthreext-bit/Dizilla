@@ -1,5 +1,6 @@
 package com.example
 
+import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -84,6 +86,9 @@ import java.util.Locale
 fun SettingsScreen(
     adBlocker: AdBlocker,
     addressManager: SiteAddressManager,
+    currentProfile: SiteProfile? = null,
+    webViewVersion: String = "",
+    onProfileUpdated: ((SiteProfile) -> Unit)? = null,
     onDismiss: () -> Unit,
     onUrlSelected: (String) -> Unit,
     onClearSiteData: () -> Unit,
@@ -103,6 +108,9 @@ fun SettingsScreen(
     var currentActiveUrl by remember { mutableStateOf(addressManager.currentUrl ?: "") }
     var sameSiteMode by remember { mutableStateOf(addressManager.sameSiteMode) }
     var recentUrls by remember { mutableStateOf(addressManager.getRecentUrls()) }
+    var isDesktopMode by remember(currentProfile) {
+        mutableStateOf(currentProfile?.desktopMode == true || currentProfile?.userAgentMode == "desktop")
+    }
 
     // Dialog states
     var showChangeUrlDialog by remember { mutableStateOf(false) }
@@ -153,14 +161,20 @@ fun SettingsScreen(
                 )
             }
         ) { paddingValues ->
-            Column(
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(paddingValues)
-                    .verticalScroll(scrollState)
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                    .padding(paddingValues),
+                contentAlignment = Alignment.TopCenter
             ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 840.dp)
+                        .verticalScroll(scrollState)
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
 
                 // SECTION 1: Site Address & Dynamic Policy
                 Card(
@@ -288,6 +302,49 @@ fun SettingsScreen(
                                 Text("Esnek Mod (Marka Eşleşmesi)", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                                 Text("Aynı marka etiketini taşıyan uzantılar da dahil (örn: .now, .nl, .com)", color = Color(0xFF94A3B8), fontSize = 11.sp)
                             }
+                        }
+
+                        // Desktop Mode Toggle for TV / Large screens
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(color = Color(0xFF334155))
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Masaüstü Görünümü (Desktop Mode)",
+                                    color = Color.White,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Siteyi masaüstü Chrome tarayıcı olarak yükler (TV Box ve geniş ekranlar için idealdir)",
+                                    color = Color(0xFF94A3B8),
+                                    fontSize = 11.sp
+                                )
+                            }
+                            Switch(
+                                checked = isDesktopMode,
+                                onCheckedChange = { checked ->
+                                    isDesktopMode = checked
+                                    currentProfile?.let { profile ->
+                                        profile.desktopMode = checked
+                                        profile.userAgentMode = if (checked) "desktop" else "mobile"
+                                        onProfileUpdated?.invoke(profile)
+                                    }
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color(0xFF06B6D4),
+                                    checkedTrackColor = Color(0xFF0891B2).copy(alpha = 0.5f),
+                                    uncheckedThumbColor = Color.LightGray,
+                                    uncheckedTrackColor = Color(0xFF334155)
+                                ),
+                                modifier = Modifier.focusable()
+                            )
                         }
 
                         // Recent URLs list
@@ -681,9 +738,50 @@ fun SettingsScreen(
                     }
                 }
 
+                // SECTION 5: Sistem & WebView Bilgisi
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Sistem & WebView Bilgisi",
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                fontSize = 15.sp
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Aktif WebView Sürümü: ${if (webViewVersion.isNotBlank()) webViewVersion else "Sistem WebView"}",
+                            color = Color(0xFFE2E8F0),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Android Platformu: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 11.sp
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Uygulama Paketi: com.example.dizillaapp (Hedef: Android 14 / API 34)",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(24.dp))
             }
         }
+    }
     }
 
     // DIALOG 1: Change URL Dialog
@@ -795,7 +893,7 @@ fun ChangeUrlDialog(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     // Paste button
                     OutlinedButton(
@@ -808,17 +906,26 @@ fun ChangeUrlDialog(
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Yapıştır", fontSize = 11.sp)
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text("Yapıştır", fontSize = 10.sp)
                     }
 
                     // Default preset button
                     OutlinedButton(
                         onClick = { inputUrl = "https://dizilla.now" },
-                        modifier = Modifier.weight(1f).focusable(),
+                        modifier = Modifier.weight(1.1f).focusable(),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text("dizilla.now", fontSize = 11.sp)
+                        Text("dizilla", fontSize = 10.sp, color = Color(0xFF38BDF8))
+                    }
+
+                    // YabancıDizi preset button
+                    OutlinedButton(
+                        onClick = { inputUrl = "https://yabancidizi.watch/" },
+                        modifier = Modifier.weight(1.2f).focusable(),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("yabancidizi", fontSize = 10.sp, color = Color(0xFF34D399))
                     }
                 }
             }

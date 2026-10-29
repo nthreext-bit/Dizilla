@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -73,6 +74,7 @@ fun SetupUrlScreen(
         ) {
             Card(
                 modifier = Modifier
+                    .widthIn(max = 680.dp)
                     .fillMaxWidth()
                     .verticalScroll(scrollState),
                 shape = RoundedCornerShape(20.dp),
@@ -155,7 +157,7 @@ fun SetupUrlScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Action Chips (Paste & Sample)
+                    // Action Chips (Paste & Quick Presets)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -171,8 +173,8 @@ fun SetupUrlScreen(
                             shape = RoundedCornerShape(10.dp)
                         ) {
                             Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Yapıştır", fontSize = 12.sp)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Yapıştır", fontSize = 11.sp)
                         }
 
                         Button(
@@ -180,11 +182,23 @@ fun SetupUrlScreen(
                                 inputUrl = "https://dizilla.now"
                                 errorMessage = null
                             },
-                            modifier = Modifier.weight(1f).focusable(),
+                            modifier = Modifier.weight(1.1f).focusable(),
                             shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155))
                         ) {
-                            Text("dizilla.now", fontSize = 12.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
+                            Text("dizilla.now", fontSize = 11.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
+                            onClick = {
+                                inputUrl = "https://yabancidizi.watch/"
+                                errorMessage = null
+                            },
+                            modifier = Modifier.weight(1.2f).focusable(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155))
+                        ) {
+                            Text("yabancidizi", fontSize = 11.sp, color = Color(0xFF34D399), fontWeight = FontWeight.Bold)
                         }
                     }
 
