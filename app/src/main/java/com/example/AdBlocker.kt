@@ -163,6 +163,8 @@ class AdBlocker(private val context: Context) {
     }
 
     fun getEffectiveCosmeticScript(): String {
+        if (!isEnabled) return ""
+
         val extra = currentProfile?.extraCssHideSelectors
         return if (!extra.isNullOrBlank()) {
             // Belge başında document.head henüz yoksa DOMContentLoaded'a kadar bekler; seçici metni

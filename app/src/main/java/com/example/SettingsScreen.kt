@@ -88,7 +88,8 @@ fun SettingsScreen(
     onUrlSelected: (String) -> Unit,
     onClearSiteData: () -> Unit,
     onShareNetworkLogs: () -> Unit,
-    onUpdateBlocklist: suspend () -> Result<Int>
+    onUpdateBlocklist: suspend () -> Result<Int>,
+    onAdBlockEnabledChanged: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -389,6 +390,7 @@ fun SettingsScreen(
                                 onCheckedChange = { checked ->
                                     isAdBlockEnabled = checked
                                     adBlocker.isEnabled = checked
+                                    onAdBlockEnabledChanged(checked)
                                 },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color(0xFF06B6D4),

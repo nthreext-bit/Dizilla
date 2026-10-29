@@ -311,6 +311,7 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Throwable) {}
         docStartHandler = null
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            if (!adBlocker.isEnabled) return
             try {
                 docStartHandler = WebViewCompat.addDocumentStartJavaScript(
                     webView,
@@ -573,6 +574,10 @@ class MainActivity : AppCompatActivity() {
                 },
                 onUpdateBlocklist = {
                     adBlocker.updateRemoteBlocklist()
+                },
+                onAdBlockEnabledChanged = {
+                    registerDocStartScript()
+                    webView.reload()
                 }
             )
         }
