@@ -107,12 +107,6 @@ class MainActivity : AppCompatActivity() {
     // Jetpack Compose Settings / Setup View
     private lateinit var composeSettingsView: ComposeView
 
-    // Detected Video Cast Banner
-    private lateinit var castStreamBanner: View
-    private lateinit var txtCastStreamInfo: TextView
-    private lateinit var btnCastNow: Button
-    private lateinit var btnCloseCastBanner: ImageButton
-
     // Fullscreen and PiP
     private lateinit var fullscreenContainer: FrameLayout
     private lateinit var fullscreenOverlayControls: View
@@ -264,7 +258,6 @@ class MainActivity : AppCompatActivity() {
             swipeRefreshLayout.isEnabled = false
             mediaRouteButton.visibility = View.GONE
             btnPipFullscreen.visibility = View.GONE
-            castStreamBanner.visibility = View.GONE
         } else {
             cursorView.visibility = View.GONE
         }
@@ -476,11 +469,6 @@ class MainActivity : AppCompatActivity() {
 
         composeSettingsView = findViewById(R.id.composeSettingsView)
 
-        castStreamBanner = findViewById(R.id.castStreamBanner)
-        txtCastStreamInfo = findViewById(R.id.txtCastStreamInfo)
-        btnCastNow = findViewById(R.id.btnCastNow)
-        btnCloseCastBanner = findViewById(R.id.btnCloseCastBanner)
-
         fullscreenContainer = findViewById(R.id.fullscreenContainer)
         fullscreenOverlayControls = findViewById(R.id.fullscreenOverlayControls)
         btnExitFullscreen = findViewById(R.id.btnExitFullscreen)
@@ -524,17 +512,6 @@ class MainActivity : AppCompatActivity() {
             enterPipMode()
         }
 
-        // Cast Stream Banner Actions
-        btnCastNow.setOnClickListener {
-            lastDetectedVideoUrl?.let { url ->
-                val title = webView.title ?: lastDetectedVideoTitle
-                castVideo(url, title)
-            }
-        }
-
-        btnCloseCastBanner.setOnClickListener {
-            castStreamBanner.visibility = View.GONE
-        }
     }
 
     private fun showSetupUrlScreen() {
@@ -947,10 +924,6 @@ class MainActivity : AppCompatActivity() {
         }
         lastDetectedVideoUrl = url
         lastDetectedVideoTitle = webView.title ?: "Dizilla Video"
-        txtCastStreamInfo.text = "Akış: ${Uri.parse(url).host ?: "Video"}"
-        castStreamBanner.visibility = View.VISIBLE
-        // Otomatik yayın kaldırıldı: yalnızca kullanıcı "TV'de Oynat"a bastığında veya
-        // Cast oturumu yeni başladığında (sessionManagerListener) gönderilir.
     }
 
     fun castVideo(videoUrl: String, title: String) {
@@ -983,7 +956,6 @@ class MainActivity : AppCompatActivity() {
 
         remoteMediaClient.load(mediaInfo, MediaLoadOptions.Builder().setAutoplay(true).build())
         Toast.makeText(this, "TV'de oynatılıyor: $title", Toast.LENGTH_LONG).show()
-        castStreamBanner.visibility = View.GONE
     }
 
     // Fullscreen View Handlers
