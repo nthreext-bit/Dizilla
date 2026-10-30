@@ -3,6 +3,7 @@ package com.example
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -12,6 +13,23 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class ExampleRobolectricTest {
+
+  @Test
+  fun `network logs redact URL query credentials`() {
+    NetworkLogger.clearLogs()
+
+    NetworkLogger.logRequest(
+      host = "media.example",
+      url = "https://media.example/watch?token=secret-value",
+      type = "document",
+      isBlocked = false,
+      reason = "Passed"
+    )
+
+    val log = NetworkLogger.getRecentLogs().single().toString()
+    assertTrue(log.contains("https://media.example/watch"))
+    assertFalse(log.contains("secret-value"))
+  }
 
   @Test
   fun `disabled ad blocker does not inject cosmetic script`() {

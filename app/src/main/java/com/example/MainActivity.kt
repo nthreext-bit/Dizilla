@@ -17,7 +17,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
+import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -62,9 +64,6 @@ import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
 import kotlinx.coroutines.launch
-import java.io.ByteArrayInputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
@@ -690,11 +689,6 @@ class MainActivity : AppCompatActivity() {
         cookieManager.setAcceptThirdPartyCookies(webView, true)
 
         settings.saveFormData = false
-        try {
-            settings.safeBrowsingEnabled = false
-        } catch (e: Exception) {
-            // Ignored if unsupported
-        }
 
         // Cosmetic script injection at document start if supported (fallback: onPageStarted)
         registerDocStartScript()
@@ -712,13 +706,32 @@ class MainActivity : AppCompatActivity() {
             fun onPlayerInfoDiscovered(jsonData: String?) {
                 if (!jsonData.isNullOrBlank()) {
                     Log.d("PlayerInfo", "================ PLAYER INFO DISCOVERED ================")
-                    Log.d("PlayerInfo", jsonData)
+                    Log.d("PlayerInfo", redactUrlsForLog(jsonData))
                     Log.d("PlayerInfo", "=========================================================")
                 }
             }
         }, "DizillaNative")
 
         webView.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                val message = redactUrlsForLog(consoleMessage.message())
+                if (message.startsWith("[DizillaMedia]")) {
+                    when (consoleMessage.messageLevel()) {
+                        ConsoleMessage.MessageLevel.ERROR -> Log.e(TAG, message)
+                        else -> Log.i(TAG, message)
+                    }
+                } else if (BuildConfig.DEBUG &&
+                    consoleMessage.messageLevel() == ConsoleMessage.MessageLevel.ERROR
+                ) {
+                    Log.w(
+                        TAG,
+                        "Web console ${consoleMessage.sourceId()}:${consoleMessage.lineNumber()} " +
+                            message.take(500)
+                    )
+                }
+                return true
+            }
+
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                 if (newProgress < 100) {
                     pageProgressBar.visibility = View.VISIBLE
@@ -770,6 +783,9 @@ class MainActivity : AppCompatActivity() {
                 val headers = request?.requestHeaders
                 val acceptHeader = headers?.get("Accept") ?: ""
                 val isMainFrame = request?.isForMainFrame == true
+                if (isMainFrame) {
+                    logMainFrameRequest(request)
+                }
 
                 val requestType = when {
                     uriString.contains(".m3u8") || uriString.contains(".mp4") || uriString.contains("/hls/") || uriString.contains("videoplayback") -> "media"
@@ -785,20 +801,11 @@ class MainActivity : AppCompatActivity() {
                 // AdBlocker network check with NetLog recording
                 val blockedResponse = adBlocker.shouldIntercept(uri, requestType)
                 if (blockedResponse != null) {
+                    Log.w(TAG, "Blocked WebView resource host=${uri.host} type=$requestType")
                     runOnUiThread {
                         updateBadgeCount()
                     }
                     return blockedResponse
-                }
-
-                // If not blocked, check subframes for X-Frame-Options to eliminate ERR_BLOCKED_BY_RESPONSE
-                if (!isMainFrame && (acceptHeader.contains("text/html") || requestType == "iframe" ||
-                    uriString.contains("embed") || uriString.contains("player") ||
-                    uriString.contains("/e/") || uriString.contains("/w/"))) {
-                    val unblocked = stripFrameBlockingHeaders(request)
-                    if (unblocked != null) {
-                        return unblocked
-                    }
                 }
 
                 return null
@@ -811,10 +818,15 @@ class MainActivity : AppCompatActivity() {
                 val uri = request?.url ?: return false
                 val scheme = uri.scheme?.lowercase(Locale.ROOT)
                 val host = uri.host?.lowercase(Locale.ROOT) ?: ""
+                Log.i(
+                    TAG,
+                    "Navigation requested mainFrame=${request.isForMainFrame} " +
+                        "redirect=${request.isRedirect} target=${safeUrlForLog(uri)}"
+                )
 
                 // Block external application intents and market links
                 if (scheme != "http" && scheme != "https") {
-                    Log.d("AdBlock", "Blocked non-web scheme navigation: $uri")
+                    Log.w(TAG, "Navigation denied: unsupported scheme=$scheme")
                     return true
                 }
 
@@ -827,19 +839,20 @@ class MainActivity : AppCompatActivity() {
                 // Engel listesi Google kontrolünden ÖNCE bakılır (adservice.google.com gibi reklam
                 // adresleri *.google.com izniyle geçmesin)
                 if (adBlocker.isBlocked(host) != null) {
-                    Log.d("AdBlock", "Blocked navigation to blocked domain: $host")
+                    Log.w(TAG, "Navigation denied by blocklist host=$host")
                     return true
                 }
 
                 // Google Sign-In Support (accounts.google.com)
                 if (host == "accounts.google.com" || host.endsWith(".google.com") || host.endsWith(".google.com.tr") ||
                     host == "accounts.youtube.com" || host.endsWith(".youtube.com")) {
-                    Log.d("AdBlock", "Allowing Google Sign-In navigation: $uri")
+                    Log.i(TAG, "Navigation allowed for Google sign-in host=$host")
                     return false
                 }
 
                 // Dynamic same-site policy or allowlist check
                 if (addressManager.isSameSite(host) || adBlocker.isAllowed(host)) {
+                    Log.i(TAG, "Navigation allowed host=$host reason=same-site-or-allowlist")
                     return false
                 }
 
@@ -851,16 +864,18 @@ class MainActivity : AppCompatActivity() {
                 val isFlexible = addressManager.sameSiteMode == SameSiteMode.FLEXIBLE
 
                 if (isBrandMatch || isFlexible) {
+                    Log.w(TAG, "Navigation paused for domain migration host=$host")
                     promptDomainMigration(host, uri.toString())
                     return true
                 }
 
                 // Block rogue redirect ads to unrelated external domains
-                Log.d("AdBlock", "Blocked rogue navigation redirect to: $uri")
+                Log.w(TAG, "Navigation denied by external-domain policy host=$host")
                 return true
             }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                Log.i(TAG, "Page started url=${safeUrlForLog(url)}")
                 errorContainer.visibility = View.GONE
                 webView.visibility = View.VISIBLE
                 // Belge-başı script destekleniyorsa tekrar enjekte etmeye gerek yok
@@ -870,6 +885,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
+                Log.i(TAG, "Page finished url=${safeUrlForLog(url)}")
                 swipeRefreshLayout.isRefreshing = false
                 if (docStartHandler == null) {
                     view?.evaluateJavascript(adBlocker.getEffectiveCosmeticScript(), null)
@@ -881,14 +897,108 @@ class MainActivity : AppCompatActivity() {
                 request: WebResourceRequest?,
                 error: WebResourceError?
             ) {
+                val uri = request?.url
+                Log.e(
+                    TAG,
+                    "Web resource error code=${error?.errorCode} description=${error?.description} " +
+                        "url=${safeUrlForLog(uri)} mainFrame=${request?.isForMainFrame} " +
+                        "mediaPath=${mediaPathForLog(uri)}"
+                )
                 if (request?.isForMainFrame == true) {
                     webView.visibility = View.GONE
                     errorContainer.visibility = View.VISIBLE
                     swipeRefreshLayout.isRefreshing = false
                 }
             }
+
+            override fun onReceivedHttpError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                errorResponse: WebResourceResponse?
+            ) {
+                val uri = request?.url
+                val redirect = errorResponse?.responseHeaders
+                    ?.entries
+                    ?.firstOrNull { it.key.equals("Location", ignoreCase = true) }
+                    ?.value
+                Log.e(
+                    TAG,
+                    "HTTP resource error status=${errorResponse?.statusCode} " +
+                        "url=${safeUrlForLog(uri)} mainFrame=${request?.isForMainFrame} " +
+                        "redirect=${redirect?.let { safeUrlForLog(it) } ?: "none"} " +
+                        "mediaPath=${mediaPathForLog(uri)}"
+                )
+            }
+
+            override fun onReceivedSslError(
+                view: WebView?,
+                handler: SslErrorHandler?,
+                error: android.net.http.SslError?
+            ) {
+                Log.e(
+                    TAG,
+                    "TLS error primary=${error?.primaryError} " +
+                        "url=${error?.url?.let { safeUrlForLog(it) }}"
+                )
+                handler?.cancel()
+            }
         }
     }
+
+    private fun mediaPathForLog(uri: Uri?): String {
+        val extension = uri?.lastPathSegment
+            ?.substringAfterLast('.', "")
+            ?.lowercase(Locale.ROOT)
+            .orEmpty()
+        return if (extension in setOf("m3u8", "mpd", "mp4", "webm", "m4s", "ts")) {
+            extension
+        } else {
+            "other"
+        }
+    }
+
+    private fun logMainFrameRequest(request: WebResourceRequest) {
+        val headers = request.requestHeaders
+        fun header(name: String): String? =
+            headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
+
+        val userAgent = header("User-Agent").orEmpty()
+        val chromeVersion = Regex("""Chrome/([\d.]+)""").find(userAgent)?.groupValues?.get(1)
+        val refererHost = header("Referer")?.let { Uri.parse(it).host }
+        val originHost = header("Origin")?.let { Uri.parse(it).host }
+        val cookiePresent = !header("Cookie").isNullOrBlank() ||
+            !CookieManager.getInstance().getCookie(request.url.toString()).isNullOrBlank()
+
+        Log.i(
+            TAG,
+            "Main-frame request method=${request.method} url=${safeUrlForLog(request.url)} " +
+                "uaChrome=${chromeVersion ?: "unknown"} uaMobile=${userAgent.contains("Mobile")} " +
+                "uaWebViewMarker=${userAgent.contains("; wv")} " +
+                "accept=${header("Accept")?.take(120) ?: "none"} " +
+                "acceptLanguage=${header("Accept-Language")?.take(80) ?: "none"} " +
+                "refererHost=${refererHost ?: "none"} originHost=${originHost ?: "none"} " +
+                "cookiePresent=$cookiePresent"
+        )
+    }
+
+    private fun safeUrlForLog(rawUrl: String?): String {
+        if (rawUrl.isNullOrBlank()) return "none"
+        return safeUrlForLog(Uri.parse(rawUrl))
+    }
+
+    private fun safeUrlForLog(uri: Uri?): String {
+        if (uri == null) return "none"
+        val scheme = uri.scheme ?: return "unknown"
+        val host = uri.host ?: return scheme
+        val port = if (uri.port >= 0) ":${uri.port}" else ""
+        val path = uri.encodedPath.orEmpty().take(180)
+        return "$scheme://$host$port$path"
+    }
+
+    private fun redactUrlsForLog(message: String): String =
+        Regex("""https?://[^\s"'<>]+""").replace(message) { match ->
+            safeUrlForLog(match.value)
+        }.take(500)
 
     private fun promptDomainMigration(newHost: String, targetUrl: String) {
         runOnUiThread {
@@ -1062,114 +1172,6 @@ class MainActivity : AppCompatActivity() {
                 topBar.visibility = View.VISIBLE
                 setSystemBarsVisible(true)
             }
-        }
-    }
-
-    private fun stripFrameBlockingHeaders(request: WebResourceRequest): WebResourceResponse? {
-        val uri = request.url ?: return null
-        val urlStr = uri.toString()
-        val method = request.method ?: "GET"
-        if (!method.equals("GET", ignoreCase = true)) return null
-
-        return try {
-            val url = URL(urlStr)
-            val connection = url.openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.instanceFollowRedirects = true
-            connection.connectTimeout = 8000
-            connection.readTimeout = 8000
-
-            // Forward request headers
-            request.requestHeaders?.forEach { (key, value) ->
-                try {
-                    connection.setRequestProperty(key, value)
-                } catch (_: Throwable) {}
-            }
-
-            // Ensure proper User-Agent
-            if (connection.getRequestProperty("User-Agent") == null) {
-                connection.setRequestProperty("User-Agent", webView.settings.userAgentString)
-            }
-            // Pass Referer if not set
-            if (connection.getRequestProperty("Referer") == null) {
-                addressManager.currentUrl?.let { current ->
-                    connection.setRequestProperty("Referer", current)
-                }
-            }
-
-            // Pass cookies from CookieManager
-            val cookie = CookieManager.getInstance().getCookie(urlStr)
-            if (!cookie.isNullOrBlank()) {
-                connection.setRequestProperty("Cookie", cookie)
-            }
-
-            connection.connect()
-
-            val statusCode = connection.responseCode
-            val statusMessage = connection.responseMessage ?: "OK"
-
-            // Save Set-Cookie headers back into CookieManager
-            val headerFields = connection.headerFields
-            headerFields["Set-Cookie"]?.forEach { c ->
-                try {
-                    CookieManager.getInstance().setCookie(urlStr, c)
-                } catch (_: Throwable) {}
-            }
-            headerFields["set-cookie"]?.forEach { c ->
-                try {
-                    CookieManager.getInstance().setCookie(urlStr, c)
-                } catch (_: Throwable) {}
-            }
-
-            // Strip restrictive frame-blocking headers
-            val responseHeaders = mutableMapOf<String, String>()
-            headerFields.forEach { (key, values) ->
-                if (key != null && values != null && values.isNotEmpty()) {
-                    val lowerKey = key.lowercase(Locale.ROOT)
-                    if (lowerKey != "x-frame-options" &&
-                        lowerKey != "content-security-policy" &&
-                        lowerKey != "content-security-policy-report-only" &&
-                        lowerKey != "cross-origin-resource-policy" &&
-                        lowerKey != "cross-origin-embedder-policy"
-                    ) {
-                        responseHeaders[key] = values.joinToString(", ")
-                    }
-                }
-            }
-            // Allow embedding
-            responseHeaders["Access-Control-Allow-Origin"] = "*"
-            responseHeaders["Cross-Origin-Resource-Policy"] = "cross-origin"
-
-            var mimeType = "text/html"
-            var encoding = "utf-8"
-            val contentType = connection.contentType
-            if (contentType != null) {
-                val parts = contentType.split(";").map { it.trim() }
-                if (parts.isNotEmpty()) mimeType = parts[0]
-                for (part in parts) {
-                    if (part.lowercase(Locale.ROOT).startsWith("charset=")) {
-                        encoding = part.substring(8).trim()
-                    }
-                }
-            }
-
-            val inputStream = if (statusCode in 200..399) {
-                connection.inputStream
-            } else {
-                connection.errorStream ?: ByteArrayInputStream(ByteArray(0))
-            }
-
-            WebResourceResponse(
-                mimeType,
-                encoding,
-                statusCode,
-                if (statusMessage.isBlank()) "OK" else statusMessage,
-                responseHeaders,
-                inputStream
-            )
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to proxy frame headers for $urlStr: ${e.message}")
-            null
         }
     }
 

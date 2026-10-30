@@ -39,11 +39,13 @@ TV modunda Cast, PiP ve aşağı çekip yenileme kapalıdır; masaüstü görün
 
 ## Hata ayıklama (Logcat)
 
-`adb logcat -s WebViewInfo NetLog PlayerInfo AdBlock DeviceMode DRM`
+`adb logcat -s DizillaApp WebViewInfo NetLog PlayerInfo AdBlock DeviceMode DRM`
 
 - `WebViewInfo`: WebView paketi/sürümü ve kullanılan kullanıcı ajanı
+- `DizillaApp`: sayfa yönlendirmeleri, HTTP/SSL/WebView hataları ve ana belge istek özeti
 - `NetLog`: her ağ isteği (engellendi/geçti)
 - `PlayerInfo`: sayfadaki iframe ve video kaynakları
+- URL sorgu parametreleri ve çerez değerleri tanılama kayıtlarına yazılmaz; yalnızca çerez bulunup bulunmadığı kaydedilir.
 
 ## APK'yı GitHub'da derletme (bilgisayarda Android Studio olmadan)
 

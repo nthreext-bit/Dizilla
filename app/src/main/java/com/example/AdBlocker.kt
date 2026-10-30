@@ -285,7 +285,11 @@ class AdBlocker(private val context: Context) {
             val count = blockedCount.incrementAndGet()
             saveBlockedCount(count)
             NetworkLogger.logRequest(host, urlString, requestType, isBlocked = true, reason = matchedRule)
-            Log.d(TAG, "BLOCKED: host='$host' uri='$uri' [Rule: $matchedRule, Total: $count]")
+            Log.d(
+                TAG,
+                "BLOCKED: host='$host' uri='${NetworkLogger.redactUrl(urlString)}' " +
+                    "[Rule: $matchedRule, Total: $count]"
+            )
             return EMPTY_RESPONSE
         }
 

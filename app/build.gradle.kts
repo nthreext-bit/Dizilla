@@ -12,8 +12,8 @@ android {
     minSdk = 26
     // 34: Android 15+ kenardan kenara (edge-to-edge) zorunluluğu targetSdk 35 ile başlar.
     targetSdk = 34
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 2
+    versionName = "1.0.2"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

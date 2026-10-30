@@ -1,5 +1,6 @@
 package com.example
 
+import android.net.Uri
 import android.util.Log
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
@@ -37,7 +38,8 @@ object NetworkLogger {
         reason: String
     ) {
         val timestamp = timeFormat.format(Date())
-        val entry = LogEntry(timestamp, host, url, type, isBlocked, reason)
+        val safeUrl = redactUrl(url)
+        val entry = LogEntry(timestamp, host, safeUrl, type, isBlocked, reason)
 
         if (logQueue.size >= MAX_LOGS) {
             logQueue.removeFirst()
@@ -46,8 +48,16 @@ object NetworkLogger {
 
         if (BuildConfig.DEBUG) {
             val status = if (isBlocked) "BLOCKED" else "ALLOWED"
-            Log.d(TAG_NET_LOG, "[$status] [$type] host=$host | url=$url | reason=$reason")
+            Log.d(TAG_NET_LOG, "[$status] [$type] host=$host | url=$safeUrl | reason=$reason")
         }
+    }
+
+    internal fun redactUrl(rawUrl: String): String {
+        val uri = Uri.parse(rawUrl)
+        val scheme = uri.scheme ?: return "unknown"
+        val host = uri.host ?: return scheme
+        val port = if (uri.port >= 0) ":${uri.port}" else ""
+        return "$scheme://$host$port${uri.encodedPath.orEmpty().take(180)}"
     }
 
     @Synchronized
