@@ -22,6 +22,7 @@ class AdBlocker(private val context: Context) {
     companion object {
         private const val TAG = "AdBlock"
         const val DEFAULT_REMOTE_BLOCKLIST_URL = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+        const val ADGUARD_DNS_FILTER_URL = "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"
         private const val PREFS_NAME = "adblocker_prefs"
         private const val PREF_BLOCKED_COUNT = "pref_blocked_count"
         private const val PREF_LAST_UPDATE = "pref_last_update"
@@ -29,6 +30,10 @@ class AdBlocker(private val context: Context) {
 
         private const val USER_ALLOWLIST_FILE = "allowlist_user.txt"
         private const val USER_BLOCKLIST_FILE = "blocklist_user.txt"
+        private const val ADGUARD_DNS_FILTER_FILE = "adguard_dns_filter.txt"
+
+        private val ADGUARD_DNS_RULE_REGEX =
+            Regex("^(?:(@@))?\\|\\|([A-Za-z0-9.-]+)\\^(?:\\$(badfilter))?\\|?$", RegexOption.IGNORE_CASE)
 
         private val EMPTY_RESPONSE = WebResourceResponse(
             "text/plain",
@@ -38,10 +43,24 @@ class AdBlocker(private val context: Context) {
             mapOf("Access-Control-Allow-Origin" to "*"),
             ByteArrayInputStream(ByteArray(0))
         )
+
+        internal fun parseAdGuardDnsRule(rawLine: String): Pair<String, Boolean>? {
+            val match = ADGUARD_DNS_RULE_REGEX.matchEntire(rawLine.trim()) ?: return null
+            if (match.groupValues[3].equals("badfilter", ignoreCase = true)) return null
+
+            val domain = match.groupValues[2].lowercase(Locale.ROOT)
+            if (domain.startsWith(".") || domain.endsWith(".") ||
+                domain.split(".").any { it.isEmpty() || it.startsWith("-") || it.endsWith("-") }) {
+                return null
+            }
+            return domain to (match.groupValues[1].isNotEmpty())
+        }
     }
 
     private val allowlist = Collections.synchronizedSet(HashSet<String>())
     private val blocklist = Collections.synchronizedSet(HashSet<String>())
+    private val adGuardDnsBlocklist = Collections.synchronizedSet(HashSet<String>())
+    private val adGuardDnsAllowlist = Collections.synchronizedSet(HashSet<String>())
     val blockedCount = AtomicInteger(0)
 
     var currentProfile: SiteProfile? = null
@@ -68,6 +87,7 @@ class AdBlocker(private val context: Context) {
         ensureFilesInitialized()
         loadAllowlist()
         loadBlocklist()
+        loadAdGuardDnsFilter()
         loadCosmeticScript()
     }
 
@@ -150,6 +170,39 @@ class AdBlocker(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load blocklist", e)
         }
+    }
+
+    private fun loadAdGuardDnsFilter() {
+        try {
+            val blocks = mutableSetOf<String>()
+            val allows = mutableSetOf<String>()
+            val file = File(context.filesDir, ADGUARD_DNS_FILTER_FILE)
+            if (file.exists()) {
+                file.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        if (line.startsWith("@@")) {
+                            allows.add(line.removePrefix("@@").lowercase(Locale.ROOT))
+                        } else if (line.isNotBlank()) {
+                            blocks.add(line.lowercase(Locale.ROOT))
+                        }
+                    }
+                }
+            }
+            adGuardDnsBlocklist.clear()
+            adGuardDnsBlocklist.addAll(blocks)
+            adGuardDnsAllowlist.clear()
+            adGuardDnsAllowlist.addAll(allows)
+            Log.d(TAG, "Loaded ${blocks.size} AdGuard DNS blocks and ${allows.size} exceptions.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load AdGuard DNS filter", e)
+        }
+    }
+
+    private fun findAdGuardDnsBlock(host: String): String? {
+        val parts = host.lowercase(Locale.ROOT).split(".")
+        val candidates = parts.indices.map { parts.subList(it, parts.size).joinToString(".") }
+        if (candidates.any { adGuardDnsAllowlist.contains(it) }) return null
+        return candidates.firstOrNull { adGuardDnsBlocklist.contains(it) }
     }
 
     private fun loadCosmeticScript() {
@@ -246,7 +299,10 @@ class AdBlocker(private val context: Context) {
             return null
         }
 
-        // 3. Check blocklist including all parent domains (subdomains match)
+        // AdGuard DNS exceptions apply only to AdGuard rules, not user/profile block rules.
+        findAdGuardDnsBlock(lowerHost)?.let { return "AdGuardDNS($it)" }
+
+        // Check blocklists including all parent domains (subdomains match)
         val parts = lowerHost.split(".")
         for (i in parts.indices) {
             val candidate = parts.subList(i, parts.size).joinToString(".")
@@ -275,6 +331,10 @@ class AdBlocker(private val context: Context) {
             return null
         }
 
+        if (isKnownAdPath(uri)) {
+            return blockedResponse(host, urlString, requestType, "SiteAdPath(/allads/)")
+        }
+
         if (isAllowed(host)) {
             NetworkLogger.logRequest(host, urlString, requestType, isBlocked = false, reason = "Allowlisted")
             return null
@@ -282,19 +342,34 @@ class AdBlocker(private val context: Context) {
 
         val matchedRule = isBlocked(host)
         if (matchedRule != null) {
-            val count = blockedCount.incrementAndGet()
-            saveBlockedCount(count)
-            NetworkLogger.logRequest(host, urlString, requestType, isBlocked = true, reason = matchedRule)
-            Log.d(
-                TAG,
-                "BLOCKED: host='$host' uri='${NetworkLogger.redactUrl(urlString)}' " +
-                    "[Rule: $matchedRule, Total: $count]"
-            )
-            return EMPTY_RESPONSE
+            return blockedResponse(host, urlString, requestType, matchedRule)
         }
 
         NetworkLogger.logRequest(host, urlString, requestType, isBlocked = false, reason = "Passed")
         return null
+    }
+
+    private fun isKnownAdPath(uri: Uri): Boolean {
+        val host = uri.host?.lowercase(Locale.ROOT) ?: return false
+        val isMacellanHost = host == "macellan.online" || host.endsWith(".macellan.online")
+        return isMacellanHost && uri.path.orEmpty().startsWith("/allads/", ignoreCase = true)
+    }
+
+    private fun blockedResponse(
+        host: String,
+        url: String,
+        requestType: String,
+        rule: String
+    ): WebResourceResponse {
+        val count = blockedCount.incrementAndGet()
+        saveBlockedCount(count)
+        NetworkLogger.logRequest(host, url, requestType, isBlocked = true, reason = rule)
+        Log.d(
+            TAG,
+            "BLOCKED: host='$host' uri='${NetworkLogger.redactUrl(url)}' " +
+                "[Rule: $rule, Total: $count]"
+        )
+        return EMPTY_RESPONSE
     }
 
     // 1-Click Rule Additions
@@ -374,6 +449,9 @@ class AdBlocker(private val context: Context) {
             val blockContent = context.assets.open("blocklist_hosts.txt").bufferedReader().use { it.readText() }
             File(context.filesDir, USER_BLOCKLIST_FILE).writeText(blockContent)
             loadBlocklist()
+
+            File(context.filesDir, ADGUARD_DNS_FILTER_FILE).delete()
+            loadAdGuardDnsFilter()
         } catch (e: Exception) {
             Log.e(TAG, "Error resetting lists to default", e)
         }
@@ -402,7 +480,7 @@ class AdBlocker(private val context: Context) {
     }
 
     fun getRulesCount(): Int {
-        return blocklist.size
+        return blocklist.size + adGuardDnsBlocklist.size
     }
 
     fun getAllowlistCount(): Int {
@@ -413,33 +491,10 @@ class AdBlocker(private val context: Context) {
     suspend fun updateRemoteBlocklist(urlStr: String = DEFAULT_REMOTE_BLOCKLIST_URL): Result<Int> = withContext(Dispatchers.IO) {
         try {
             Log.d(TAG, "Updating blocklist from $urlStr...")
-            val url = URL(urlStr)
-            val connection = url.openConnection() as HttpURLConnection
-            connection.connectTimeout = 15000
-            connection.readTimeout = 20000
-            connection.requestMethod = "GET"
-            connection.instanceFollowRedirects = true
+            val downloaded = downloadHostBlocklist(urlStr)
+            val (adGuardBlocks, adGuardAllows) = downloadAdGuardDnsFilter()
 
-            if (connection.responseCode !in 200..299) {
-                return@withContext Result.failure(Exception("HTTP Error: ${connection.responseCode}"))
-            }
-
-            // Önce belleğe indir: bağlantı yarıda kesilirse mevcut liste dosyası bozulmaz.
-            val downloaded = mutableSetOf<String>()
-            BufferedReader(InputStreamReader(connection.inputStream)).use { reader ->
-                var line = reader.readLine()
-                while (line != null) {
-                    val clean = cleanDomainLine(line)
-                    // "0.0.0.0 0.0.0.0" gibi satırlardaki IP'leri ve alan adı olmayanları atla
-                    if (clean.isNotEmpty() && clean.contains('.') && clean != "0.0.0.0" &&
-                        clean.any { it.isLetter() }) {
-                        downloaded.add(clean)
-                    }
-                    line = reader.readLine()
-                }
-            }
-
-            if (downloaded.isNotEmpty()) {
+            if (downloaded.isNotEmpty() && adGuardBlocks.isNotEmpty()) {
                 // Kullanıcının ve varsayılan kuralları koru: indirilen liste mevcutlara EKLENİR
                 val merged = HashSet<String>(blocklist.size + downloaded.size)
                 synchronized(blocklist) { merged.addAll(blocklist) }
@@ -459,21 +514,104 @@ class AdBlocker(private val context: Context) {
                     tmp.delete()
                 }
 
+                val adGuardFile = File(context.filesDir, ADGUARD_DNS_FILTER_FILE)
+                val adGuardTmp = File(context.filesDir, "$ADGUARD_DNS_FILTER_FILE.tmp")
+                adGuardTmp.bufferedWriter().use { writer ->
+                    for (domain in adGuardBlocks) {
+                        writer.write(domain)
+                        writer.newLine()
+                    }
+                    for (domain in adGuardAllows) {
+                        writer.write("@@$domain")
+                        writer.newLine()
+                    }
+                }
+                if (!adGuardTmp.renameTo(adGuardFile)) {
+                    adGuardFile.writeText(adGuardTmp.readText())
+                    adGuardTmp.delete()
+                }
+
                 blocklist.clear()
                 blocklist.addAll(merged)
+                adGuardDnsBlocklist.clear()
+                adGuardDnsBlocklist.addAll(adGuardBlocks)
+                adGuardDnsAllowlist.clear()
+                adGuardDnsAllowlist.addAll(adGuardAllows)
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                     .edit()
                     .putLong(PREF_LAST_UPDATE, System.currentTimeMillis())
                     .apply()
 
-                Log.d(TAG, "Blocklist updated: ${downloaded.size} downloaded, ${merged.size} total rules.")
-                return@withContext Result.success(merged.size)
+                val totalRules = merged.size + adGuardBlocks.size
+                Log.d(
+                    TAG,
+                    "Blocklists updated: ${downloaded.size} hosts, ${adGuardBlocks.size} AdGuard DNS rules, " +
+                        "${adGuardAllows.size} exceptions, $totalRules total blocking rules."
+                )
+                return@withContext Result.success(totalRules)
             } else {
-                return@withContext Result.failure(Exception("Downloaded list was empty"))
+                return@withContext Result.failure(
+                    Exception("A downloaded hosts list or AdGuard DNS filter was empty")
+                )
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error updating blocklist", e)
             return@withContext Result.failure(e)
+        }
+    }
+
+    private fun downloadHostBlocklist(urlStr: String): Set<String> {
+        val connection = URL(urlStr).openConnection() as HttpURLConnection
+        connection.connectTimeout = 15000
+        connection.readTimeout = 20000
+        connection.requestMethod = "GET"
+        connection.instanceFollowRedirects = true
+        try {
+            if (connection.responseCode !in 200..299) {
+                throw Exception("HTTP Error from hosts list: ${connection.responseCode}")
+            }
+
+            val downloaded = mutableSetOf<String>()
+            BufferedReader(InputStreamReader(connection.inputStream)).use { reader ->
+                var line = reader.readLine()
+                while (line != null) {
+                    val clean = cleanDomainLine(line)
+                    if (clean.isNotEmpty() && clean.contains('.') && clean != "0.0.0.0" &&
+                        clean.any { it.isLetter() }) {
+                        downloaded.add(clean)
+                    }
+                    line = reader.readLine()
+                }
+            }
+            return downloaded
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun downloadAdGuardDnsFilter(): Pair<Set<String>, Set<String>> {
+        val connection = URL(ADGUARD_DNS_FILTER_URL).openConnection() as HttpURLConnection
+        connection.connectTimeout = 15000
+        connection.readTimeout = 30000
+        connection.requestMethod = "GET"
+        connection.instanceFollowRedirects = true
+        try {
+            if (connection.responseCode !in 200..299) {
+                throw Exception("HTTP Error from AdGuard DNS filter: ${connection.responseCode}")
+            }
+
+            val blocks = mutableSetOf<String>()
+            val allows = mutableSetOf<String>()
+            BufferedReader(InputStreamReader(connection.inputStream)).use { reader ->
+                reader.forEachLine { line ->
+                    val (domain, isException) = parseAdGuardDnsRule(line) ?: return@forEachLine
+                    if (isException) allows.add(domain) else blocks.add(domain)
+                }
+            }
+            if (blocks.isEmpty()) throw Exception("AdGuard DNS filter contained no supported domain rules")
+            return blocks to allows
+        } finally {
+            connection.disconnect()
         }
     }
 }

@@ -491,9 +491,14 @@ fun SettingsScreen(
                                                 strokeWidth = 2.dp
                                             )
                                         } else {
-                                            Text("Güncelle", fontSize = 11.sp, color = Color.White)
+                                            Text("Filtreleri Güncelle", fontSize = 11.sp, color = Color.White)
                                         }
                                     }
+                                    Text(
+                                        text = "StevenBlack hosts ve AdGuard DNS alan adı kuralları güncellenir. URL, joker karakter ve ek seçenekli kurallar atlanır.",
+                                        color = Color(0xFF64748B),
+                                        fontSize = 10.sp
+                                    )
                                 }
                             }
                         }

@@ -16,6 +16,7 @@
     // Not: "ads" gibi kısa alt dizgiler "uploads", "heads" gibi sözcükleri de eşleştirdiği için
     // iframe seçicileri host/yol sınırlarına bağlandı (player iframe'i yanlışlıkla gizlenmesin).
     const adStyles = `
+        img[src*="/allads/"], iframe[src*="/allads/"], a[href*="/allads/"],
         iframe[src*="//ads."], iframe[src*=".ads."], iframe[src*="/ads/"], iframe[src*="/adserver"],
         iframe[src*="doubleclick"], iframe[src*="adsterra"],
         iframe[src*="popads"], iframe[src*="propeller"], iframe[src*="exoclick"],
