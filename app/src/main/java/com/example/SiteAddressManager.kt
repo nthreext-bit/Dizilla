@@ -23,10 +23,12 @@ class SiteAddressManager(private val context: Context) {
         private const val PREFS_NAME = "dizilla_address_prefs"
         private const val KEY_ACTIVE_URL = "active_site_url"
         private const val KEY_RECENT_URLS = "recent_site_urls"
+        private const val KEY_BOOKMARKED_URLS = "bookmarked_site_urls"
         private const val KEY_SAME_SITE_MODE = "same_site_mode"
         private const val KEY_TV_MODE = "tv_mode"
         private const val KEY_UA_MODE = "ua_mode"
         const val MAX_RECENT_URLS = 10
+        const val MAX_BOOKMARKED_URLS = 30
     }
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -118,6 +120,45 @@ class SiteAddressManager(private val context: Context) {
 
     fun clearRecentUrls() {
         prefs.edit().remove(KEY_RECENT_URLS).apply()
+    }
+
+    fun getBookmarkedUrls(): List<String> {
+        val jsonStr = prefs.getString(KEY_BOOKMARKED_URLS, null) ?: return emptyList()
+        return try {
+            val arr = JSONArray(jsonStr)
+            (0 until arr.length())
+                .map { normalizeUrl(arr.getString(it)) }
+                .filter(::isValidUrl)
+                .distinct()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun addBookmark(url: String): Boolean {
+        val normalized = normalizeUrl(url)
+        if (!isValidUrl(normalized)) return false
+
+        val bookmarks = getBookmarkedUrls().toMutableList()
+        if (normalized in bookmarks) return true
+        if (bookmarks.size >= MAX_BOOKMARKED_URLS) return false
+        bookmarks.add(0, normalized)
+        saveBookmarks(bookmarks)
+        return true
+    }
+
+    fun removeBookmark(url: String): Boolean {
+        val normalized = normalizeUrl(url)
+        val bookmarks = getBookmarkedUrls().toMutableList()
+        if (!bookmarks.remove(normalized)) return false
+        saveBookmarks(bookmarks)
+        return true
+    }
+
+    private fun saveBookmarks(bookmarks: List<String>) {
+        val arr = JSONArray()
+        bookmarks.forEach(arr::put)
+        prefs.edit().putString(KEY_BOOKMARKED_URLS, arr.toString()).apply()
     }
 
     fun normalizeUrl(raw: String): String {

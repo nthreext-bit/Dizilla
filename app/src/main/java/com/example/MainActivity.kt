@@ -37,6 +37,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.addCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.ui.platform.ComposeView
@@ -105,6 +106,42 @@ class MainActivity : AppCompatActivity() {
 
     // Jetpack Compose Settings / Setup View
     private lateinit var composeSettingsView: ComposeView
+
+    private val createSettingsBackup = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        runCatching {
+            val output = contentResolver.openOutputStream(uri)
+                ?: error("Yedek dosyası oluşturulamadı")
+            output.bufferedWriter(Charsets.UTF_8).use {
+                it.write(SettingsBackupManager.createBackup(this))
+            }
+        }.onSuccess {
+            Toast.makeText(this, "Uygulama ayarları yedeklendi", Toast.LENGTH_SHORT).show()
+        }.onFailure { error ->
+            Log.e(TAG, "Settings backup export failed", error)
+            Toast.makeText(this, "Yedekleme başarısız: ${error.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private val restoreSettingsBackup = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        runCatching {
+            val input = contentResolver.openInputStream(uri)
+                ?: error("Yedek dosyası okunamadı")
+            val content = input.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            SettingsBackupManager.restoreBackup(this, content)
+        }.onSuccess {
+            Toast.makeText(this, "Ayarlar geri yüklendi; uygulama yeniden başlatılıyor", Toast.LENGTH_LONG).show()
+            recreate()
+        }.onFailure { error ->
+            Log.e(TAG, "Settings backup restore failed", error)
+            Toast.makeText(this, "Geri yükleme başarısız: ${error.message}", Toast.LENGTH_LONG).show()
+        }
+    }
 
     // Fullscreen and PiP
     private lateinit var fullscreenContainer: FrameLayout
@@ -547,6 +584,12 @@ class MainActivity : AppCompatActivity() {
                 },
                 onShareNetworkLogs = {
                     shareNetworkLogs()
+                },
+                onExportSettings = {
+                    createSettingsBackup.launch("dizilla_ayarlar_yedek.json")
+                },
+                onImportSettings = {
+                    restoreSettingsBackup.launch(arrayOf("application/json", "text/*"))
                 },
                 onUpdateBlocklist = {
                     adBlocker.updateRemoteBlocklist()

@@ -17,6 +17,75 @@ import java.io.File
 class ExampleRobolectricTest {
 
   @Test
+  fun `settings backup restores preferences and custom blocklists`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val addressPrefs = context.getSharedPreferences("dizilla_address_prefs", Context.MODE_PRIVATE)
+    val adBlockPrefs = context.getSharedPreferences("adblocker_prefs", Context.MODE_PRIVATE)
+    val blocklistFile = File(context.filesDir, "blocklist_user.txt")
+    val originalBlocklist = blocklistFile.takeIf { it.exists() }?.readText()
+    try {
+      addressPrefs.edit().clear().putString("active_site_url", "https://before.example").commit()
+      adBlockPrefs.edit().clear().putBoolean("pref_adblock_enabled", false).commit()
+      blocklistFile.writeText("before.example\n")
+      val backup = SettingsBackupManager.createBackup(context)
+
+      addressPrefs.edit().putString("active_site_url", "https://after.example").commit()
+      adBlockPrefs.edit().putBoolean("pref_adblock_enabled", true).commit()
+      blocklistFile.writeText("after.example\n")
+
+      SettingsBackupManager.restoreBackup(context, backup)
+
+      assertEquals("https://before.example", addressPrefs.getString("active_site_url", null))
+      assertEquals(false, adBlockPrefs.getBoolean("pref_adblock_enabled", true))
+      assertEquals("before.example\n", blocklistFile.readText())
+    } finally {
+      addressPrefs.edit().clear().commit()
+      adBlockPrefs.edit().clear().commit()
+      if (originalBlocklist == null) blocklistFile.delete() else blocklistFile.writeText(originalBlocklist)
+    }
+  }
+
+  @Test
+  fun `invalid settings backup is rejected without changing preferences`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val prefs = context.getSharedPreferences("dizilla_address_prefs", Context.MODE_PRIVATE)
+    prefs.edit().clear().putString("active_site_url", "https://keep.example").commit()
+
+    try {
+      SettingsBackupManager.restoreBackup(context, """{"format":"not-dizilla","version":1}""")
+      throw AssertionError("Invalid backup should have been rejected")
+    } catch (_: IllegalArgumentException) {
+      assertEquals("https://keep.example", prefs.getString("active_site_url", null))
+    } finally {
+      prefs.edit().clear().commit()
+    }
+  }
+
+  @Test
+  fun `site bookmarks persist normalized URLs and can be removed`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val prefs = context.getSharedPreferences("dizilla_address_prefs", Context.MODE_PRIVATE)
+    prefs.edit().clear().commit()
+    try {
+      val manager = SiteAddressManager(context)
+
+      assertTrue(manager.addBookmark("https://saved.example.com/watch"))
+      assertTrue(manager.addBookmark("https://saved.example.com/watch"))
+      assertEquals(listOf("https://saved.example.com/watch"), manager.getBookmarkedUrls())
+      assertEquals(
+        listOf("https://saved.example.com/watch"),
+        SiteAddressManager(context).getBookmarkedUrls()
+      )
+
+      assertTrue(manager.removeBookmark("https://saved.example.com/watch"))
+      assertTrue(manager.getBookmarkedUrls().isEmpty())
+      assertFalse(manager.addBookmark("not a URL"))
+    } finally {
+      prefs.edit().clear().commit()
+    }
+  }
+
+  @Test
   fun `known Macellan allads banner is blocked before allowlist`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     context.getSharedPreferences("adblocker_prefs", Context.MODE_PRIVATE).edit().clear().commit()

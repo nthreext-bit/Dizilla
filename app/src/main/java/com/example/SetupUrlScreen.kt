@@ -21,13 +21,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -58,8 +62,12 @@ fun SetupUrlScreen(
     var inputUrl by remember { mutableStateOf("") }
     var selectedMode by remember { mutableStateOf(addressManager.sameSiteMode) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var bookmarkedUrls by remember { mutableStateOf(addressManager.getBookmarkedUrls()) }
+    var addressMenuExpanded by remember { mutableStateOf(false) }
 
     val scrollState = rememberScrollState()
+    val normalizedInput = addressManager.normalizeUrl(inputUrl)
+    val isBookmarked = normalizedInput in bookmarkedUrls
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -113,7 +121,7 @@ fun SetupUrlScreen(
                     Spacer(modifier = Modifier.height(6.dp))
 
                     Text(
-                        text = "Görüntülemek istediğiniz video/dizi sitesinin adresini girin veya örnek adresi seçin:",
+                        text = "Bir web adresi girin ya da yer imlerinizden seçin. Adreslerinizi kendiniz kaydedip yönetebilirsiniz:",
                         color = Color(0xFF94A3B8),
                         fontSize = 13.sp,
                         lineHeight = 18.sp
@@ -175,17 +183,95 @@ fun SetupUrlScreen(
                             Text("Yapıştır", fontSize = 12.sp)
                         }
 
-                        Button(
-                            onClick = {
-                                inputUrl = "https://dizilla.now"
-                                errorMessage = null
-                            },
-                            modifier = Modifier.weight(1f).focusable(),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155))
-                        ) {
-                            Text("dizilla.now", fontSize = 12.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
+                        Box(modifier = Modifier.weight(1f)) {
+                            OutlinedButton(
+                                onClick = { addressMenuExpanded = true },
+                                modifier = Modifier.fillMaxWidth().focusable(),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text(
+                                    "Adreslerim",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF38BDF8),
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = addressMenuExpanded,
+                                onDismissRequest = { addressMenuExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Dizilla.now") },
+                                    onClick = {
+                                        inputUrl = "https://dizilla.now"
+                                        errorMessage = null
+                                        addressMenuExpanded = false
+                                    }
+                                )
+                                bookmarkedUrls.forEach { savedUrl ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                android.net.Uri.parse(savedUrl).host ?: savedUrl,
+                                                maxLines = 1
+                                            )
+                                        },
+                                        onClick = {
+                                            inputUrl = savedUrl
+                                            errorMessage = null
+                                            addressMenuExpanded = false
+                                        },
+                                        trailingIcon = {
+                                            IconButton(
+                                                onClick = {
+                                                    addressManager.removeBookmark(savedUrl)
+                                                    bookmarkedUrls = addressManager.getBookmarkedUrls()
+                                                }
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Delete,
+                                                    contentDescription = "Yer imini kaldır",
+                                                    tint = Color(0xFFEF4444)
+                                                )
+                                            }
+                                        }
+                                    )
+                                }
+                                DropdownMenuItem(
+                                    text = { Text("Başka adres gir...") },
+                                    onClick = {
+                                        inputUrl = ""
+                                        errorMessage = null
+                                        addressMenuExpanded = false
+                                    }
+                                )
+                            }
                         }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            if (!addressManager.isValidUrl(normalizedInput)) {
+                                errorMessage = "Yer imi için geçerli bir web adresi girin"
+                            } else if (isBookmarked) {
+                                addressManager.removeBookmark(normalizedInput)
+                                bookmarkedUrls = addressManager.getBookmarkedUrls()
+                                errorMessage = null
+                            } else if (addressManager.addBookmark(normalizedInput)) {
+                                bookmarkedUrls = addressManager.getBookmarkedUrls()
+                                errorMessage = null
+                            } else {
+                                errorMessage = "En fazla ${SiteAddressManager.MAX_BOOKMARKED_URLS} yer imi kaydedilebilir"
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().focusable(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text(
+                            if (isBookmarked) "Yer imlerinden kaldır" else "Bu adresi yer imlerine ekle",
+                            fontSize = 12.sp
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(18.dp))

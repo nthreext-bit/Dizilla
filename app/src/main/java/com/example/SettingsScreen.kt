@@ -41,6 +41,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -88,6 +90,8 @@ fun SettingsScreen(
     onUrlSelected: (String) -> Unit,
     onClearSiteData: () -> Unit,
     onShareNetworkLogs: () -> Unit,
+    onExportSettings: () -> Unit,
+    onImportSettings: () -> Unit,
     onUpdateBlocklist: suspend () -> Result<Int>,
     onAdBlockEnabledChanged: (Boolean) -> Unit
 ) {
@@ -111,6 +115,7 @@ fun SettingsScreen(
     var showChangeUrlDialog by remember { mutableStateOf(false) }
     var showEditAllowlistDialog by remember { mutableStateOf(false) }
     var showEditBlocklistDialog by remember { mutableStateOf(false) }
+    var showRestoreSettingsConfirmation by remember { mutableStateOf(false) }
 
     // Last 50 requests
     var recentRequests by remember { mutableStateOf(NetworkLogger.getRecentRequests(50)) }
@@ -736,6 +741,57 @@ fun SettingsScreen(
                     }
                 }
 
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Share,
+                                contentDescription = null,
+                                tint = Color(0xFF38BDF8),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Ayarları Yedekle ve Geri Yükle",
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                fontSize = 15.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Uygulama tercihlerini, site adreslerini, yer imlerini ve reklam filtre listelerini JSON yedeğine kaydedin veya yedekten geri yükleyin.",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 12.sp
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = onExportSettings,
+                                modifier = Modifier.weight(1f).focusable(),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Yedekle", fontSize = 12.sp)
+                            }
+                            Button(
+                                onClick = { showRestoreSettingsConfirmation = true },
+                                modifier = Modifier.weight(1f).focusable(),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0891B2))
+                            ) {
+                                Text("Geri Yükle", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(24.dp))
             }
         }
@@ -799,6 +855,38 @@ fun SettingsScreen(
             }
         )
     }
+
+    if (showRestoreSettingsConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showRestoreSettingsConfirmation = false },
+            containerColor = Color(0xFF1E293B),
+            title = {
+                Text("Ayarlar geri yüklensin mi?", color = Color.White, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Text(
+                    "Seçeceğiniz yedek mevcut uygulama ayarlarının ve kullanıcı filtre listelerinin üzerine yazacak. Devam edilsin mi?",
+                    color = Color(0xFFCBD5E1)
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showRestoreSettingsConfirmation = false
+                        onImportSettings()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0891B2))
+                ) {
+                    Text("Yedek seç")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestoreSettingsConfirmation = false }) {
+                    Text("İptal", color = Color(0xFF94A3B8))
+                }
+            }
+        )
+    }
 }
 
 /** Kumandayla seçilebilir (focusable) yatay seçenek satırı. */
@@ -846,6 +934,10 @@ fun ChangeUrlDialog(
     val clipboardManager = LocalClipboardManager.current
     var inputUrl by remember { mutableStateOf(currentUrl) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var bookmarkedUrls by remember { mutableStateOf(addressManager.getBookmarkedUrls()) }
+    var addressMenuExpanded by remember { mutableStateOf(false) }
+    val normalizedInput = addressManager.normalizeUrl(inputUrl)
+    val isBookmarked = normalizedInput in bookmarkedUrls
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -902,14 +994,89 @@ fun ChangeUrlDialog(
                         Text("Yapıştır", fontSize = 11.sp)
                     }
 
-                    // Default preset button
-                    OutlinedButton(
-                        onClick = { inputUrl = "https://dizilla.now" },
-                        modifier = Modifier.weight(1f).focusable(),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text("dizilla.now", fontSize = 11.sp)
+                    Box(modifier = Modifier.weight(1f)) {
+                        OutlinedButton(
+                            onClick = { addressMenuExpanded = true },
+                            modifier = Modifier.fillMaxWidth().focusable(),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Adreslerim", fontSize = 11.sp)
+                        }
+                        DropdownMenu(
+                            expanded = addressMenuExpanded,
+                            onDismissRequest = { addressMenuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Dizilla.now") },
+                                onClick = {
+                                    inputUrl = "https://dizilla.now"
+                                    errorMessage = null
+                                    addressMenuExpanded = false
+                                }
+                            )
+                            bookmarkedUrls.forEach { savedUrl ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            android.net.Uri.parse(savedUrl).host ?: savedUrl,
+                                            maxLines = 1
+                                        )
+                                    },
+                                    onClick = {
+                                        inputUrl = savedUrl
+                                        errorMessage = null
+                                        addressMenuExpanded = false
+                                    },
+                                    trailingIcon = {
+                                        IconButton(
+                                            onClick = {
+                                                addressManager.removeBookmark(savedUrl)
+                                                bookmarkedUrls = addressManager.getBookmarkedUrls()
+                                            }
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = "Yer imini kaldır",
+                                                tint = Color(0xFFEF4444)
+                                            )
+                                        }
+                                    }
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("Başka adres gir...") },
+                                onClick = {
+                                    inputUrl = ""
+                                    errorMessage = null
+                                    addressMenuExpanded = false
+                                }
+                            )
+                        }
                     }
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        if (!addressManager.isValidUrl(normalizedInput)) {
+                            errorMessage = "Yer imi için geçerli bir web adresi girin"
+                        } else if (isBookmarked) {
+                            addressManager.removeBookmark(normalizedInput)
+                            bookmarkedUrls = addressManager.getBookmarkedUrls()
+                            errorMessage = null
+                        } else if (addressManager.addBookmark(normalizedInput)) {
+                            bookmarkedUrls = addressManager.getBookmarkedUrls()
+                            errorMessage = null
+                        } else {
+                            errorMessage = "En fazla ${SiteAddressManager.MAX_BOOKMARKED_URLS} yer imi kaydedilebilir"
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().focusable(),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        if (isBookmarked) "Yer imlerinden kaldır" else "Bu adresi yer imlerine ekle",
+                        fontSize = 11.sp
+                    )
                 }
             }
         },
